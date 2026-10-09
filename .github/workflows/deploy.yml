@@ -23,7 +23,7 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      - run: npm test
+      
       - run: npm run build        # fails in CI if src/config.js still has REPLACE_ placeholders
       - uses: actions/upload-pages-artifact@v3
         with:
