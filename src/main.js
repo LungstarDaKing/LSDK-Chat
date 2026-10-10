@@ -2,12 +2,14 @@ import './styles.css'
 import { supabase } from './lib/supabase.js'
 import { h, clear } from './lib/dom.js'
 import { CONFIG } from './config.js'
+import { TERMS_VERSION } from './version.js'
 import { state, flash, setFlash, go, refreshProfile } from './lib/state.js'
 import { renderAuth, renderReset } from './pages/auth.js'
 import { renderChat, teardownChat } from './pages/chat.js'
 import { renderProfile } from './pages/profile.js'
 import { renderLegal } from './pages/legal.js'
 import { renderConsent } from './pages/consent.js'
+import { startHeartbeat, stopHeartbeat } from './lib/status.js'
 
 // Clickjacking protection (GitHub Pages cannot send X-Frame-Options / frame-ancestors).
 if (window.top !== window.self) {
@@ -21,7 +23,7 @@ const root = document.getElementById('app')
 supabase.auth.onAuthStateChange((event, s) => {
   state.session = s
   if (event === 'PASSWORD_RECOVERY') state.recovering = true
-  if (event === 'SIGNED_OUT') { state.profile = null; state.recovering = false; teardownChat() }
+  if (event === 'SIGNED_OUT') { state.profile = null; state.recovering = false; teardownChat(); stopHeartbeat() }
   if (['SIGNED_IN', 'SIGNED_OUT', 'PASSWORD_RECOVERY'].includes(event)) setTimeout(route, 0)
 })
 
@@ -46,10 +48,11 @@ async function route() {
   }
   // Profile page (data export + account deletion) stays reachable even before terms are accepted.
   if (name === 'profile' && state.profile) { teardownChat(); return renderProfile(root) }
-  if (!state.profile || state.profile.terms_version !== CONFIG.termsVersion) {
+  if (!state.profile || state.profile.terms_version !== TERMS_VERSION) {
     teardownChat()
     return renderConsent(root, !!state.profile?.terms_version)
   }
+  startHeartbeat()
   if (['login', 'register', 'forgot', ''].includes(name)) return go('#/chat')
   if (name === 'profile') { teardownChat(); return renderProfile(root) }
   if (name === 'chat') return renderChat(root, arg || null)

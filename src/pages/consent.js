@@ -1,6 +1,7 @@
 import { supabase } from '../lib/supabase.js'
 import { h, clear, friendlyError } from '../lib/dom.js'
 import { CONFIG } from '../config.js'
+import { TERMS_VERSION } from '../version.js'
 import { go, refreshProfile } from '../lib/state.js'
 
 // Shown to signed-in users who have not yet accepted the CURRENT terms version
@@ -12,7 +13,7 @@ export function renderConsent(root, isUpdate) {
   const btn = h('button', { class: 'btn primary', type: 'button', onclick: async () => {
     if (!agree.checked || !age.checked) { msg.textContent = 'Please tick both boxes to continue.'; msg.className = 'msg error'; return }
     btn.disabled = true
-    const { error } = await supabase.rpc('accept_terms', { p_version: CONFIG.termsVersion })
+    const { error } = await supabase.rpc('accept_terms', { p_version: TERMS_VERSION })
     if (error) { btn.disabled = false; msg.textContent = friendlyError(error); msg.className = 'msg error'; return }
     await refreshProfile()
     go('#/chat')
@@ -30,6 +31,6 @@ export function renderConsent(root, isUpdate) {
     msg,
     h('div', { class: 'row' }, btn,
       h('button', { class: 'btn', type: 'button', onclick: () => supabase.auth.signOut() }, 'Decline and sign out')),
-    h('p', { class: 'small' }, `Version ${CONFIG.termsVersion}. If you decline, you can still `, h('a', { href: '#/profile' }, 'download your data or delete your account'), '.'),
+    h('p', { class: 'small' }, `Version ${TERMS_VERSION}. If you decline, you can still `, h('a', { href: '#/profile' }, 'download your data or delete your account'), '.'),
   ))
 }

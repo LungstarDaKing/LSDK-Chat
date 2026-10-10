@@ -1,6 +1,7 @@
 import { supabase, appUrl } from '../lib/supabase.js'
 import { h, clear, friendlyError, toast } from '../lib/dom.js'
 import { CONFIG } from '../config.js'
+import { TERMS_VERSION } from '../version.js'
 import { flash, setFlash, go, state } from '../lib/state.js'
 
 const MIN_PASSWORD = 10
@@ -58,7 +59,7 @@ export function renderAuth(root, mode) {
         // Cheap pre-check; the database trigger is still the source of truth.
         const { data, error } = await supabase.auth.signUp({
           email: em, password: password.value,
-          options: { emailRedirectTo: appUrl(), data: { username: username.value, terms_version: CONFIG.termsVersion } },
+          options: { emailRedirectTo: appUrl(), data: { username: username.value, terms_version: TERMS_VERSION } },
         })
         if (error) return show(friendlyError(error))
         if (!data.session) {

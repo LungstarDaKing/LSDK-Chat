@@ -11,7 +11,7 @@ export const getProfile = () => state.profile
 export async function refreshProfile() {
   if (!state.session) { state.profile = null; return null }
   const { data, error } = await supabase.from('profiles')
-    .select('id, username, terms_version, terms_accepted_at, created_at')
+    .select('id, username, bio, avatar_path, terms_version, terms_accepted_at, created_at')
     .eq('id', state.session.user.id).maybeSingle()
   if (error) throw error
   state.profile = data
