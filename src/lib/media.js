@@ -186,3 +186,34 @@ export async function pruneAvatars(userId, keep = null) {
   const old = all.filter((p) => p !== keep)
   if (old.length) await removeFiles('avatars', old)
 }
+
+/* ---------- voice notes + stories ---------- */
+export const STORY_ACCEPT = Object.keys(TYPES).filter((t) => !t.startsWith('application/') && t !== 'text/plain').join(',')
+
+// Upload a voice note recorded in the browser (same rules and bucket as other attachments).
+export const uploadVoice = (roomId, userId, file) => uploadAttachment(roomId, userId, file)
+
+// Stories live in their own private bucket: <author id>/<random>.<ext>
+export async function uploadStoryMedia(userId, file) {
+  const type = resolveType(file)
+  if (!type || type.startsWith('application/') || type === 'text/plain') throw new Error('A status can be a photo, video or audio file.')
+  const p = await prepareFile(file)
+  const path = `${userId}/${crypto.randomUUID()}.${TYPES[p.type]}`
+  const { error } = await supabase.storage.from('stories').upload(path, p.body, { contentType: p.type, upsert: false, cacheControl: '3600' })
+  if (error) throw error
+  return { path, name: p.name, type: p.type, size: p.size }
+}
+
+// Length of an audio/video file in milliseconds (null when the browser cannot tell).
+export function mediaDuration(file) {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file)
+    const el = document.createElement(file.type.startsWith('video') ? 'video' : 'audio')
+    const done = (v) => { URL.revokeObjectURL(url); resolve(v) }
+    el.preload = 'metadata'
+    el.onloadedmetadata = () => done(Number.isFinite(el.duration) ? Math.round(el.duration * 1000) : null)
+    el.onerror = () => done(null)
+    setTimeout(() => done(null), 4000)
+    el.src = url
+  })
+}

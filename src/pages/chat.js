@@ -4,11 +4,17 @@ import { CONFIG } from '../config.js'
 import { state, go } from '../lib/state.js'
 import { ACCEPT, kind, fmtSize, uploadAttachment, removeFiles, signedUrls, signedUrl, listFiles, resolveType } from '../lib/media.js'
 import { fetchStatuses, describeStatus } from '../lib/status.js'
-import { notifyIncoming, soundEnabled, setSoundEnabled } from '../lib/sound.js'
+import { notifyIncoming } from '../lib/sound.js'
+import { RoomEvents, typingEnabled } from '../lib/room-events.js'
+import { startRecording, voiceSupported, fmtDuration } from '../lib/voice.js'
+import { CallManager, supabaseCallApi, callsSupported } from '../lib/calls.js'
+import { CallOverlay, renderCalls } from '../ui/calls-ui.js'
+import { renderUpdates } from '../ui/stories-ui.js'
+import { sweepMyStories } from '../lib/stories.js'
 
 const PAGE = 50
 const MAX_LEN = 1000
-const MSG_COLS = 'id, room_id, sender_id, content, created_at, edited_at, attachment_path, attachment_name, attachment_type, attachment_size'
+const MSG_COLS = 'id, room_id, sender_id, content, created_at, edited_at, attachment_path, attachment_name, attachment_type, attachment_size, attachment_duration'
 
 let chat = null
 export function teardownChat() { if (chat) chat.destroy(); chat = null }
@@ -31,7 +37,12 @@ class Chat {
     this.rooms = []
     this.people = new Map([[this.me.id, { username: this.me.username, avatar_path: this.me.avatar_path, bio: this.me.bio }]])
     this.status = new Map()
-    this.unread = new Set()
+    this.unread = new Map()
+    this.reads = new Map()
+    this.typers = new Map()
+    this.players = new Map()
+    this.tab = 'chats'
+    this.receipts = true
     this.currentId = null
     this.messages = []
     this.hasMore = false
@@ -48,43 +59,62 @@ class Chat {
 
   /* ---------- DOM skeleton ---------- */
   build(root) {
-    this.soundBtn = h('button', { class: 'btn icon', type: 'button', onclick: () => { setSoundEnabled(!soundEnabled()); this.drawSound() } })
-    this.drawSound = () => {
-      const on = soundEnabled()
-      this.soundBtn.textContent = on ? '🔔' : '🔕'
-      this.soundBtn.title = on ? 'Message sound is on (click to mute)' : 'Message sound is off (click to turn on)'
-      this.soundBtn.setAttribute('aria-label', this.soundBtn.title)
-      this.soundBtn.setAttribute('aria-pressed', String(on))
-    }
-    this.drawSound()
     this.roomList = h('ul', { class: 'room-list', 'aria-label': 'Your chats' })
+    this.chatsView = h('div', { class: 'tab-view', role: 'tabpanel' }, this.roomList)
+    this.updatesView = h('div', { class: 'tab-view', role: 'tabpanel', hidden: true })
+    this.callsView = h('div', { class: 'tab-view', role: 'tabpanel', hidden: true })
     this.banner = h('div', { class: 'banner', role: 'status', hidden: true }, 'Connection lost - reconnecting…')
+    this.badges = { chats: h('span', { class: 'tab-badge', hidden: true }), calls: h('span', { class: 'tab-badge', hidden: true }) }
+    this.tabBtns = {}
+    const tab = (id, icon, label) => {
+      this.tabBtns[id] = h('button', { class: 'tab', type: 'button', role: 'tab', 'aria-selected': 'false', onclick: () => this.setTab(id) },
+        h('span', { class: 'tab-icon', 'aria-hidden': 'true' }, icon, this.badges[id]), h('span', { class: 'tab-label' }, label))
+      return this.tabBtns[id]
+    }
+    this.tabs = h('nav', { class: 'tabs', role: 'tablist', 'aria-label': 'Sections' }, tab('chats', '💬', 'Chats'), tab('updates', '◎', 'Status'), tab('calls', '📞', 'Calls'))
+
     this.paneTitle = h('h2', { class: 'pane-title' })
     this.paneSub = h('div', { class: 'pane-sub' })
     this.paneAvatar = h('span', { class: 'avatar sm' })
-    this.infoBtn = h('button', { class: 'btn icon', type: 'button', 'aria-label': 'Chat info', title: 'Chat info', onclick: () => this.openInfo() }, 'ⓘ')
+    this.voiceCallBtn = h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Voice call', title: 'Voice call', onclick: () => this.callPeer(this.peerOf(this.room()), 'voice') }, '📞')
+    this.videoCallBtn = h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Video call', title: 'Video call', onclick: () => this.callPeer(this.peerOf(this.room()), 'video') }, '🎥')
+    this.infoBtn = h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Chat info', title: 'Chat info', onclick: () => this.openInfo() }, 'ⓘ')
     this.messagesEl = h('div', { class: 'messages', role: 'log', 'aria-live': 'polite', 'aria-label': 'Messages' })
+    this.typingRow = h('div', { class: 'msg-row other typing-row', 'aria-hidden': 'true' }, h('div', { class: 'bubble typing-bubble' }, h('i'), h('i'), h('i')))
     this.fileInput = h('input', { type: 'file', accept: ACCEPT, hidden: true, 'aria-label': 'Choose a file to send',
       onchange: () => { const f = this.fileInput.files[0]; this.fileInput.value = ''; if (f) this.askSendFile(f) } })
-    this.attachBtn = h('button', { class: 'btn icon', type: 'button', title: 'Send a photo, video, audio or PDF', 'aria-label': 'Attach a file', onclick: () => this.fileInput.click() }, '📎')
+    this.attachBtn = h('button', { class: 'btn icon ghost', type: 'button', title: 'Send a photo, video, audio or PDF', 'aria-label': 'Attach a file', onclick: () => this.fileInput.click() }, '📎')
     this.input = h('textarea', {
       class: 'composer-input', rows: 1, maxLength: MAX_LEN, placeholder: 'Write a message…', 'aria-label': 'Message',
       onkeydown: (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); this.send() } },
-      oninput: () => { this.input.style.height = 'auto'; this.input.style.height = Math.min(this.input.scrollHeight, 140) + 'px'; this.counter.textContent = this.input.value.length > 800 ? `${this.input.value.length}/${MAX_LEN}` : '' },
+      oninput: () => {
+        this.input.style.height = 'auto'; this.input.style.height = Math.min(this.input.scrollHeight, 140) + 'px'
+        this.counter.textContent = this.input.value.length > 800 ? `${this.input.value.length}/${MAX_LEN}` : ''
+        this.syncSendMic()
+        if (this.input.value) this.events.typing()
+      },
       onpaste: (e) => {
         const f = [...(e.clipboardData?.files || [])][0]
         if (f) { e.preventDefault(); this.askSendFile(f) }
       },
     })
     this.counter = h('span', { class: 'counter' })
-    this.sendBtn = h('button', { class: 'btn primary', type: 'button', onclick: () => this.send() }, 'Send')
-    this.composer = h('div', { class: 'composer' }, this.attachBtn, this.fileInput, this.input, this.counter, this.sendBtn)
-    this.empty = h('div', { class: 'empty' }, h('p', {}, 'Select a chat, or start a new one.'))
+    this.sendBtn = h('button', { class: 'btn primary round send', type: 'button', 'aria-label': 'Send', title: 'Send', onclick: () => this.send() }, '➤')
+    this.micBtn = h('button', { class: 'btn primary round send', type: 'button', 'aria-label': 'Record a voice note', title: 'Record a voice note', onclick: () => this.startVoice() }, '🎤')
+    this.recTime = h('span', { class: 'rec-time' }, '0:00')
+    this.recBar = h('div', { class: 'rec-bar', hidden: true },
+      h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Discard recording', title: 'Discard', onclick: () => this.cancelVoice() }, '🗑'),
+      h('span', { class: 'rec-dot', 'aria-hidden': 'true' }), this.recTime, h('span', { class: 'small grow' }, 'Recording…'),
+      h('button', { class: 'btn primary round send', type: 'button', 'aria-label': 'Send voice note', title: 'Send voice note', onclick: () => this.finishVoice() }, '➤'))
+    this.composerMain = h('div', { class: 'composer-main' }, this.attachBtn, this.fileInput, this.input, this.counter, this.sendBtn, this.micBtn)
+    this.composer = h('div', { class: 'composer' }, this.composerMain, this.recBar)
+    this.syncSendMic()
+    this.empty = h('div', { class: 'empty' }, h('div', { class: 'empty-art', 'aria-hidden': 'true' }, '💬'), h('h2', {}, CONFIG.appName), h('p', {}, 'Select a chat, or start a new one.'))
     this.pane = h('section', { class: 'pane' },
       h('header', { class: 'pane-head' },
-        h('button', { class: 'btn icon back', type: 'button', 'aria-label': 'Back to chats', onclick: () => go('#/chat') }, '←'),
+        h('button', { class: 'btn icon ghost back', type: 'button', 'aria-label': 'Back to chats', onclick: () => go('#/chat') }, '←'),
         this.paneAvatar,
-        h('div', { class: 'pane-titles' }, this.paneTitle, this.paneSub), this.infoBtn),
+        h('div', { class: 'pane-titles' }, this.paneTitle, this.paneSub), this.voiceCallBtn, this.videoCallBtn, this.infoBtn),
       this.messagesEl, this.composer)
     // drag & drop a file onto the conversation
     this.pane.addEventListener('dragover', (e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault() })
@@ -98,18 +128,19 @@ class Chat {
         h('header', { class: 'side-head' },
           h('strong', { class: 'app-name' }, CONFIG.appName),
           h('div', { class: 'row tight' },
-            h('button', { class: 'btn icon', type: 'button', title: 'New direct chat', 'aria-label': 'New direct chat', onclick: () => this.newDirect() }, '✎'),
-            h('button', { class: 'btn icon', type: 'button', title: 'New group', 'aria-label': 'New group', onclick: () => this.newGroup() }, '👥'),
-            this.soundBtn,
-            h('a', { class: 'btn icon', href: '#/profile', title: 'My profile', 'aria-label': 'My profile' }, this.avatar(this.me.id, 'xs')))),
+            h('button', { class: 'btn icon ghost', type: 'button', title: 'New direct chat', 'aria-label': 'New direct chat', onclick: () => this.newDirect() }, '✎'),
+            h('button', { class: 'btn icon ghost', type: 'button', title: 'New group', 'aria-label': 'New group', onclick: () => this.newGroup() }, '👥'),
+            h('a', { class: 'btn icon ghost', href: '#/settings', title: 'Settings and profile', 'aria-label': 'Settings and profile' }, this.avatar(this.me.id, 'xs')))),
         this.banner,
-        this.roomList,
+        this.chatsView, this.updatesView, this.callsView,
+        this.tabs,
         h('footer', { class: 'side-foot' }, h('a', { href: '#/terms', target: '_blank', rel: 'noopener' }, 'Terms'), ' · ',
           h('a', { href: '#/privacy', target: '_blank', rel: 'noopener' }, 'Privacy'), ' · ',
           h('a', { href: '#/disclosures', target: '_blank', rel: 'noopener' }, 'Disclosures'))),
       this.empty, this.pane)
     clear(root).append(this.el)
     this.setPaneVisible(false)
+    this.setTab('chats')
     this.hydrateAvatars(this.el)
   }
 
@@ -119,13 +150,34 @@ class Chat {
     this.el.classList.toggle('show-pane', on)
   }
 
+  setTab(id) {
+    this.tab = id
+    const views = { chats: this.chatsView, updates: this.updatesView, calls: this.callsView }
+    for (const [k, v] of Object.entries(views)) { v.hidden = k !== id; this.tabBtns[k]?.setAttribute('aria-selected', String(k === id)); this.tabBtns[k]?.classList.toggle('active', k === id) }
+    if (id === 'updates') renderUpdates(this.updatesView, this)
+    if (id === 'calls') { try { localStorage.setItem('lsdkchat.callsSeen', new Date().toISOString()) } catch { /* ignore */ } this.badges.calls.hidden = true; renderCalls(this.callsView, this) }
+  }
+
+  syncSendMic() {
+    const has = !!this.input.value.trim()
+    this.sendBtn.hidden = !has
+    this.micBtn.hidden = has || !voiceSupported()
+  }
+
   /* ---------- lifecycle ---------- */
   async init() {
+    sweepMyStories(this.me.id)
+    this.events = new RoomEvents({ myId: this.me.id, onTyping: (r, u) => this.onTyping(r, u), onRead: (r) => this.onReadPing(r) })
+    supabase.from('user_private').select('read_receipts').eq('id', this.me.id).maybeSingle().then(({ data }) => { if (data) this.receipts = data.read_receipts })
+    if (callsSupported()) {
+      this.calls = new CallManager({ api: supabaseCallApi(this.me.id), meId: this.me.id,
+        onChange: (s) => this.overlay?.update(s), onEnded: (e) => this.onCallEnded(e) })
+      this.overlay = new CallOverlay(this, this.calls)
+    }
     await this.loadRooms()
     this.subscribe()
-    const tick = () => { if (document.visibilityState === 'visible') { this.loadRooms() } }
-    this.poll = setInterval(tick, 30000)
-    this.onVis = () => { if (document.visibilityState === 'visible') this.loadRooms() }
+    this.poll = setInterval(() => { if (document.visibilityState === 'visible') this.loadRooms() }, 30000)
+    this.onVis = () => { if (document.visibilityState === 'visible') { this.loadRooms(); this.markRead() } }
     document.addEventListener('visibilitychange', this.onVis)
   }
 
@@ -134,6 +186,11 @@ class Chat {
     clearInterval(this.poll)
     document.removeEventListener('visibilitychange', this.onVis)
     if (this.channel) supabase.removeChannel(this.channel)
+    this.events?.leave()
+    this.rec?.cancel()
+    this.calls?.hangup?.()
+    this.calls?.destroy()
+    this.overlay?.hide()
   }
 
   subscribe() {
@@ -150,6 +207,66 @@ class Chat {
           this.wasDown = true; this.banner.hidden = false
         }
       })
+  }
+
+  /* ---------- calls ---------- */
+  async callPeer(peerId, kind) {
+    if (!peerId) return
+    if (!this.calls) return toast('Calls are not supported in this browser.', 'error')
+    try { await this.calls.start(peerId, kind) } catch (e) { toast(friendlyError(e), 'error') }
+  }
+  onCallEnded({ reason, message }) {
+    if (message && reason !== 'ended') toast(message, reason === 'error' ? 'error' : 'info')
+    else if (reason === 'ended') toast('Call ended')
+    if (this.tab === 'calls' && this.alive) renderCalls(this.callsView, this)
+    else this.loadMissedBadge()
+  }
+  async loadMissedBadge() {
+    let since = '1970-01-01'
+    try { since = localStorage.getItem('lsdkchat.callsSeen') || since } catch { /* ignore */ }
+    const { count } = await supabase.from('calls').select('id', { count: 'exact', head: true })
+      .eq('callee_id', this.me.id).in('status', ['missed']).gt('created_at', since)
+    if (!this.alive) return
+    this.badges.calls.textContent = count > 9 ? '9+' : String(count || '')
+    this.badges.calls.hidden = !count || this.tab === 'calls'
+  }
+
+  /* ---------- typing + seen ---------- */
+  onTyping(roomId, uid) {
+    if (roomId !== this.currentId || !typingEnabled()) return
+    clearTimeout(this.typers.get(uid))
+    this.typers.set(uid, setTimeout(() => { this.typers.delete(uid); this.drawTyping() }, 4000))
+    this.drawTyping()
+  }
+  drawTyping() {
+    const names = [...this.typers.keys()].map((u) => this.nameOf(u))
+    const r = this.room()
+    if (names.length) {
+      this.paneSub.textContent = r?.is_direct ? 'typing…' : `${names.join(', ')} ${names.length > 1 ? 'are' : 'is'} typing…`
+      this.paneSub.classList.add('typing')
+      if (!this.typingRow.isConnected) { this.messagesEl.append(this.typingRow); if (this.stick) this.messagesEl.scrollTop = this.messagesEl.scrollHeight }
+    } else {
+      this.paneSub.classList.remove('typing')
+      this.typingRow.remove()
+      if (r) this.renderHeader()
+    }
+  }
+  clearTypers() { for (const t of this.typers.values()) clearTimeout(t); this.typers.clear(); this.typingRow.remove(); this.paneSub.classList.remove('typing') }
+
+  onReadPing(roomId) { if (roomId === this.currentId) { clearTimeout(this.readT); this.readT = setTimeout(() => this.loadReads(), 400) } }
+  async loadReads() {
+    const id = this.currentId; if (!id) return
+    const { data, error } = await supabase.rpc('get_room_reads', { p_room: id })
+    if (!this.alive || id !== this.currentId || error) return
+    this.reads = new Map((data || []).map((r) => [r.profile_id, new Date(r.last_read_at)]))
+    this.renderMessages(false)
+  }
+  async markRead() {
+    const id = this.currentId
+    if (!id || document.visibilityState !== 'visible') return
+    if (this.unread.has(id)) { this.unread.delete(id); this.renderRooms() }
+    const { error } = await supabase.rpc('mark_room_read', { p_room: id })
+    if (!error && this.receipts !== false) this.events.read()
   }
 
   /* ---------- people, avatars, status ---------- */
@@ -203,6 +320,7 @@ class Chat {
     if (!this.alive) return
     if (error) { toast(friendlyError(error), 'error'); return }
     this.rooms = data
+    await this.loadUnread()
     for (const r of data) for (const p of r.participants) if (p.profiles) this.people.set(p.profile_id, { ...p.profiles, id: p.profile_id })
     this.renderRooms()
     if (this.currentId) {
@@ -231,21 +349,25 @@ class Chat {
 
   renderRooms() {
     clear(this.roomList)
+    let total = 0
+    for (const n of this.unread.values()) total += n
+    this.badges.chats.textContent = total > 99 ? '99+' : String(total || '')
+    this.badges.chats.hidden = !total
     if (!this.rooms.length) {
-      this.roomList.append(h('li', { class: 'room-empty' }, 'No chats yet. Use ✎ to message someone or 👥 to create a group.'))
+      this.roomList.append(h('li', { class: 'room-empty' }, h('div', { class: 'empty-art', 'aria-hidden': 'true' }, '💬'), h('p', {}, 'No chats yet.'), h('p', { class: 'small' }, 'Use ✎ to message someone or 👥 to create a group.')))
       return
     }
     for (const r of this.rooms) {
-      const unread = this.unread.has(r.id)
+      const n = this.unread.get(r.id) || 0
       const peer = this.peerOf(r)
       const sub = r.is_direct ? (describeStatus(this.status.get(peer)) || 'Direct chat') : `${r.participants.length} members`
       this.roomList.append(h('li', {},
-        h('a', { class: `room-item${r.id === this.currentId ? ' active' : ''}${unread ? ' unread' : ''}`, href: `#/chat/${r.id}`, 'aria-current': r.id === this.currentId ? 'true' : null },
-          this.roomAvatar(r),
+        h('a', { class: `room-item${r.id === this.currentId ? ' active' : ''}${n ? ' unread' : ''}`, href: `#/chat/${r.id}`, 'aria-current': r.id === this.currentId ? 'true' : null },
+          this.roomAvatar(r, 'md'),
           h('span', { class: 'room-meta' },
             h('span', { class: 'room-name' }, this.title(r)),
             h('span', { class: 'room-sub' }, sub)),
-          unread && h('span', { class: 'dot', 'aria-label': 'New messages' }))))
+          n > 0 && h('span', { class: 'count', 'aria-label': `${n} unread` }, n > 99 ? '99+' : n))))
     }
     this.hydrateAvatars(this.roomList)
   }
@@ -255,34 +377,54 @@ class Chat {
     if (!r) return
     this.paneTitle.textContent = this.title(r)
     const peer = this.peerOf(r)
-    this.paneSub.textContent = r.is_direct
-      ? (describeStatus(this.status.get(peer)) || 'Direct chat')
-      : r.participants.map((p) => this.nameOf(p.profile_id)).join(', ')
+    if (!this.typers.size) {
+      this.paneSub.textContent = r.is_direct
+        ? (describeStatus(this.status.get(peer)) || 'Direct chat')
+        : r.participants.map((p) => this.nameOf(p.profile_id)).join(', ')
+    }
+    this.voiceCallBtn.hidden = this.videoCallBtn.hidden = !r.is_direct || !this.calls
     const fresh = this.roomAvatar(r, 'sm')
     this.paneAvatar.replaceWith(fresh); this.paneAvatar = fresh
     if (peer) { fresh.classList.add('clickable'); fresh.onclick = () => this.showProfile(peer) }
     this.hydrateAvatars(fresh)
   }
 
+  async loadUnread() {
+    const { data } = await supabase.rpc('get_unread_counts')
+    if (!this.alive || !data) return
+    const m = new Map()
+    for (const r of data) if (r.unread > 0 && r.room_id !== this.currentId) m.set(r.room_id, r.unread)
+    this.unread = m
+  }
+
   /* ---------- open a room ---------- */
   async open(roomId) {
     if (!roomId) {
+      this.events.leave(); this.clearTypers()
       this.currentId = null; this.messages = []; this.setPaneVisible(false); this.renderRooms(); return
     }
+    if (this.tab !== 'chats') this.setTab('chats')
     if (roomId === this.currentId) { this.setPaneVisible(true); return }
     if (!this.room(roomId)) {
       await this.loadRooms()
       if (!this.room(roomId)) { toast('Chat not found.', 'error'); return go('#/chat') }
     }
+    this.cancelVoice()
+    this.clearTypers()
     this.currentId = roomId
     this.unread.delete(roomId)
     this.editingId = null
     this.messages = []
+    this.reads = new Map()
+    this.players.clear()
     this.hasMore = false
+    this.events.join(roomId)
     this.renderRooms(); this.renderHeader(); this.setPaneVisible(true)
     this.renderMessages(true)
     this.refreshStatuses()
     await this.loadMessages(true)
+    this.markRead()
+    this.loadReads()
     this.input.focus({ preventScroll: true })
   }
 
@@ -322,12 +464,18 @@ class Chat {
     if (this.hasMore) el.append(h('button', { class: 'btn small center', type: 'button', onclick: () => this.loadOlder() }, 'Load earlier messages'))
     if (!this.messages.length && !this.hasMore) el.append(h('p', { class: 'hint' }, 'No messages yet. Say hello!'))
     const r = this.room(); const iAmAdmin = this.myRole(r) === 'admin'
+    this.lastSeenId = null
+    for (const m of this.messages) {
+      if (m.sender_id !== this.me.id) continue
+      if (r?.participants.some((p) => p.profile_id !== this.me.id && this.reads.get(p.profile_id) >= new Date(m.created_at))) this.lastSeenId = m.id
+    }
     let prev = null
     for (const m of this.messages) {
       if (!prev || !sameDay(prev.created_at, m.created_at)) el.append(h('div', { class: 'day' }, fmtDay(m.created_at)))
       el.append(this.messageEl(m, m.sender_id === this.me.id, iAmAdmin, prev && prev.sender_id === m.sender_id && sameDay(prev.created_at, m.created_at)))
       prev = m
     }
+    if (this.typers.size) el.append(this.typingRow)
     this.stick = !!(scrollDown || nearBottom)
     if (this.stick) el.scrollTop = el.scrollHeight
     this.hydrateAttachments(el)
@@ -353,9 +501,19 @@ class Chat {
       } else if (k === 'video') {
         el.append(h('video', { src: url, controls: true, preload: 'metadata', playsInline: true }))
       } else if (k === 'audio') {
-        el.append(h('audio', { src: url, controls: true, preload: 'none' }))
+        if (el.dataset.dur) el.append(this.players.get(el.dataset.attach) || this.voicePlayer(el.dataset.attach, url, Number(el.dataset.dur)))
+        else el.append(h('audio', { src: url, controls: true, preload: 'none' }))
       }
     }
+  }
+
+  // WhatsApp-style ticks: one tick = sent, two blue ticks = seen. The word "Seen" appears on the latest seen message.
+  ticks(m) {
+    const r = this.room()
+    const readers = r ? r.participants.filter((p) => p.profile_id !== this.me.id && this.reads.get(p.profile_id) >= new Date(m.created_at)) : []
+    const seen = readers.length > 0
+    const word = seen && m.id === this.lastSeenId ? (r.is_direct ? ' Seen' : ` Seen by ${readers.length}`) : ''
+    return h('span', { class: `ticks${seen ? ' seen' : ''}`, 'aria-label': seen ? 'Seen' : 'Sent' }, seen ? '✓✓' : '✓', word && h('span', { class: 'seen-word' }, word))
   }
 
   attachmentEl(m) {
@@ -371,7 +529,8 @@ class Chat {
         document.body.append(a); a.click(); a.remove()
       } }, h('span', { 'aria-hidden': 'true' }, '📄'), h('span', { class: 'fname' }, label))
     }
-    return h('div', { class: `attach ${k}`, dataset: { attach: m.attachment_path, type: m.attachment_type, name: m.attachment_name } },
+    const voice = k === 'audio' && m.attachment_duration != null
+    return h('div', { class: `attach ${k}${voice ? ' voice-wrap' : ''}`, dataset: { attach: m.attachment_path, type: m.attachment_type, name: m.attachment_name, ...(voice ? { dur: String(m.attachment_duration) } : {}) } },
       h('span', { class: 'small' }, `Loading ${label}…`))
   }
 
@@ -410,24 +569,26 @@ class Chat {
       h('div', { class: 'bubble' },
         !grouped && h('div', { class: 'meta' }, own ? 'You' : h('button', { class: 'linkish plain', type: 'button', onclick: () => this.showProfile(m.sender_id) }, this.nameOf(m.sender_id))),
         body,
-        h('div', { class: 'foot' }, fmtTime(m.created_at), m.edited_at && ' · edited'),
+        h('div', { class: 'foot' }, fmtTime(m.created_at), m.edited_at && ' · edited', own && this.ticks(m)),
         actions))
   }
 
   /* ---------- realtime handlers ---------- */
   async onInsert(m) {
     if (!m) return
+    const mine = m.sender_id === this.me.id
     const r = this.room(m.room_id)
-    if (!r) { this.loadRooms(); if (m.room_id !== this.currentId) this.unread.add(m.room_id); if (m.sender_id !== this.me.id) notifyIncoming({ inCurrentRoom: false }); return }
+    if (!r) { this.loadRooms(); if (!mine) { this.unread.set(m.room_id, (this.unread.get(m.room_id) || 0) + 1); notifyIncoming({ inCurrentRoom: false }) } return }
     r.last_message_at = m.created_at
     this.rooms.sort((a, b) => new Date(b.last_message_at) - new Date(a.last_message_at))
     if (m.room_id === this.currentId) {
       if (this.messages.some((x) => x.id === m.id)) return
       await this.ensurePeople([m.sender_id])
       this.messages.push(m)
-      this.renderMessages(m.sender_id === this.me.id)
-      if (m.sender_id !== this.me.id) notifyIncoming({ inCurrentRoom: true })
-    } else if (m.sender_id !== this.me.id) { this.unread.add(m.room_id); notifyIncoming({ inCurrentRoom: false }) }
+      if (!mine) { clearTimeout(this.typers.get(m.sender_id)); this.typers.delete(m.sender_id) }
+      this.renderMessages(mine)
+      if (!mine) { notifyIncoming({ inCurrentRoom: true }); this.markRead() }
+    } else if (!mine) { this.unread.set(m.room_id, (this.unread.get(m.room_id) || 0) + 1); notifyIncoming({ inCurrentRoom: false }) }
     this.renderRooms()
   }
   onUpdate(m) {
@@ -441,6 +602,57 @@ class Chat {
     if (this.messages.length !== n) this.renderMessages(false)
   }
 
+  /* ---------- voice notes ---------- */
+  async startVoice() {
+    if (this.rec || !this.currentId) return
+    try {
+      this.recRoom = this.currentId
+      this.rec = await startRecording({ onTick: (ms) => { this.recTime.textContent = fmtDuration(ms) }, onAutoStop: (r) => this.sendVoice(r, this.recRoom) })
+      this.composerMain.hidden = true; this.recBar.hidden = false; this.recTime.textContent = '0:00'
+    } catch (e) { this.rec = null; toast(e.message, 'error') }
+  }
+  cancelVoice() {
+    if (this.rec) { this.rec.cancel(); this.rec = null }
+    this.composerMain.hidden = false; this.recBar.hidden = true
+  }
+  async finishVoice() {
+    const rec = this.rec, room = this.recRoom
+    if (!rec) return
+    this.rec = null
+    this.composerMain.hidden = false; this.recBar.hidden = true
+    const r = await rec.stop()
+    if (!r) return toast('That was too short - hold on a little longer.', 'info')
+    this.sendVoice(r, room)
+  }
+  async sendVoice(r, roomId) {
+    if (!r) return
+    if (this.rec) { this.rec = null; this.composerMain.hidden = false; this.recBar.hidden = true }
+    toast('Sending voice note…')
+    const ok = await this.sendFile(r.file, '', roomId, null, r.durationMs)
+    if (!ok) toast('Could not send the voice note.', 'error')
+  }
+
+  voicePlayer(path, url, ms) {
+    const audio = new Audio(); audio.preload = 'metadata'; audio.src = url
+    const btn = h('button', { class: 'vp-btn', type: 'button', 'aria-label': 'Play voice note' }, '▶')
+    const fill = h('i'); const bar = h('div', { class: 'vp-bar', role: 'slider', tabIndex: 0, 'aria-label': 'Seek', 'aria-valuemin': 0, 'aria-valuemax': 100 }, fill)
+    const time = h('span', { class: 'vp-time' }, fmtDuration(ms))
+    const speed = h('button', { class: 'vp-speed', type: 'button', 'aria-label': 'Playback speed' }, '1×')
+    const el = h('div', { class: 'voice' }, btn, h('div', { class: 'vp-mid' }, bar, time), speed)
+    const total = () => (Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration * 1000 : ms)
+    btn.onclick = () => { if (audio.paused) { for (const p of this.players.values()) if (p._audio !== audio) p._audio.pause(); audio.play().catch(() => toast('Could not play this voice note.', 'error')) } else audio.pause() }
+    audio.onplay = () => { btn.textContent = '⏸'; btn.setAttribute('aria-label', 'Pause') }
+    audio.onpause = () => { btn.textContent = '▶'; btn.setAttribute('aria-label', 'Play voice note') }
+    audio.ontimeupdate = () => { const p = Math.min(100, (audio.currentTime * 1000 / total()) * 100); fill.style.width = p + '%'; bar.setAttribute('aria-valuenow', Math.round(p)); time.textContent = fmtDuration(audio.currentTime * 1000) }
+    audio.onended = () => { fill.style.width = '0%'; time.textContent = fmtDuration(ms); btn.textContent = '▶' }
+    bar.onclick = (e) => { const b = bar.getBoundingClientRect(); audio.currentTime = Math.max(0, Math.min(1, (e.clientX - b.left) / b.width)) * total() / 1000 }
+    bar.onkeydown = (e) => { if (e.key === 'ArrowRight') audio.currentTime += 5; if (e.key === 'ArrowLeft') audio.currentTime -= 5 }
+    speed.onclick = () => { const r = audio.playbackRate === 1 ? 1.5 : audio.playbackRate === 1.5 ? 2 : 1; audio.playbackRate = r; speed.textContent = r + '×' }
+    el._audio = audio
+    this.players.set(path, el)
+    return el
+  }
+
   /* ---------- actions ---------- */
   async send() {
     if (this.sending || !this.currentId) return
@@ -452,7 +664,7 @@ class Chat {
       .insert({ room_id: this.currentId, sender_id: this.me.id, content }).select(MSG_COLS).single()
     this.sending = false; this.sendBtn.disabled = false
     if (error) return toast(friendlyError(error), 'error')
-    this.input.value = ''; this.input.style.height = 'auto'; this.counter.textContent = ''
+    this.input.value = ''; this.input.style.height = 'auto'; this.counter.textContent = ''; this.syncSendMic()
     this.onInsert(data)
     this.input.focus()
   }
@@ -482,7 +694,7 @@ class Chat {
     })
   }
 
-  async sendFile(file, caption, roomId, errEl) {
+  async sendFile(file, caption, roomId, errEl, durationMs = null) {
     let up = null
     try {
       toast('Uploading…')
@@ -490,6 +702,7 @@ class Chat {
       const { data, error } = await supabase.from('messages').insert({
         room_id: roomId, sender_id: this.me.id, content: caption.slice(0, MAX_LEN),
         attachment_path: up.path, attachment_name: up.name, attachment_type: up.type, attachment_size: up.size,
+        ...(durationMs ? { attachment_duration: durationMs } : {}),
       }).select(MSG_COLS).single()
       if (error) throw error
       this.onInsert(data)

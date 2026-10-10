@@ -7,9 +7,11 @@ import { state, flash, setFlash, go, refreshProfile } from './lib/state.js'
 import { renderAuth, renderReset } from './pages/auth.js'
 import { renderChat, teardownChat } from './pages/chat.js'
 import { renderProfile } from './pages/profile.js'
+import { renderSettings } from './pages/settings.js'
 import { renderLegal } from './pages/legal.js'
 import { renderConsent } from './pages/consent.js'
 import { startHeartbeat, stopHeartbeat } from './lib/status.js'
+import './lib/theme.js'
 
 // Clickjacking protection (GitHub Pages cannot send X-Frame-Options / frame-ancestors).
 if (window.top !== window.self) {
@@ -55,6 +57,7 @@ async function route() {
   startHeartbeat()
   if (['login', 'register', 'forgot', ''].includes(name)) return go('#/chat')
   if (name === 'profile') { teardownChat(); return renderProfile(root) }
+  if (name === 'settings') { teardownChat(); return renderSettings(root) }
   if (name === 'chat') return renderChat(root, arg || null)
   return go('#/chat')
 }

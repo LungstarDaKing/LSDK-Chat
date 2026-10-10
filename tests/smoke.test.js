@@ -3,14 +3,16 @@
 // page renders, validation works, and user-supplied text can never become HTML.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const ME = { id: 'u1', username: 'alice', bio: 'hello', avatar_path: null, terms_version: '2026-10-10', terms_accepted_at: new Date().toISOString(), created_at: new Date().toISOString() }
+const ME = { id: 'u1', username: 'alice', bio: 'hello', avatar_path: null, terms_version: '2026-10-11', terms_accepted_at: new Date().toISOString(), created_at: new Date().toISOString() }
 const fixtures = {
   profiles: [ME],
   rooms: [{ id: 'r1', name: 'Team', is_direct: false, last_message_at: new Date().toISOString(),
     participants: [{ profile_id: 'u1', role: 'admin', joined_at: '', profiles: { username: 'alice', avatar_path: null, bio: null } }, { profile_id: 'u2', role: 'member', joined_at: '', profiles: { username: 'bob<b>', avatar_path: null, bio: '<img src=x onerror="window.__pwned=1">' } }] }],
   messages: [{ id: 'm1', room_id: 'r1', sender_id: 'u2', content: '<img src=x onerror="window.__pwned=1"><script>window.__pwned=1</script>', created_at: new Date().toISOString(), edited_at: null, attachment_path: null, attachment_name: null, attachment_type: null, attachment_size: null },
     { id: 'm2', room_id: 'r1', sender_id: 'u2', content: 'look', created_at: new Date().toISOString(), edited_at: null, attachment_path: 'r1/u2/x.pdf', attachment_name: '<b>evil</b>.pdf', attachment_type: 'application/pdf', attachment_size: 2048 }],
-  user_private: [{ show_online: true, show_last_seen: true }],
+  user_private: [{ show_online: true, show_last_seen: true, share_stories: true, read_receipts: true }],
+  stories: [],
+  calls: [{ id: 'c1', caller_id: 'u1', callee_id: 'u2', kind: 'voice', status: 'ended', created_at: new Date().toISOString(), answered_at: new Date(Date.now() - 65000).toISOString(), ended_at: new Date().toISOString() }],
 }
 const calls = []
 function builder(table) {
@@ -71,7 +73,7 @@ describe('auth page', () => {
     root.querySelector('form').dispatchEvent(new Event('submit', { cancelable: true }))
     await flush()
     const arg = fakeSupabase.auth.signUp.mock.calls[0][0]
-    expect(arg.options.data).toEqual({ username: 'alice_1', terms_version: '2026-10-10' })
+    expect(arg.options.data).toEqual({ username: 'alice_1', terms_version: '2026-10-11' })
     expect(root.textContent).toMatch(/Check your email/)
   })
   it('login shows a generic message for bad credentials', async () => {
@@ -120,7 +122,6 @@ describe('profile page', () => {
     expect(root.textContent).toMatch(/Download my data/); expect(root.textContent).toMatch(/Delete my account/)
     expect(root.textContent).toContain('a@b.co')
     expect(root.querySelector('#bio').maxLength).toBe(160)
-    expect(root.querySelector('#cb-online').checked).toBe(true)
   })
 })
 
@@ -150,5 +151,33 @@ describe('media helpers', () => {
     expect(describeStatus({ online: true })).toBe('Online')
     expect(describeStatus({ online: false, lastSeen: null })).toBe('')
     expect(describeStatus({ online: false, lastSeen: new Date(Date.now() - 5 * 60000).toISOString() })).toMatch(/Last seen 5 min ago/)
+  })
+})
+
+
+describe('v0.4 pages', () => {
+  it('chat has Chats / Status / Calls tabs, voice + call buttons, typing row', async () => {
+    const { state } = await import('../src/lib/state.js')
+    state.session = { user: { id: 'u1', email: 'a@b.co' } }; state.profile = ME
+    const { renderChat, teardownChat } = await import('../src/pages/chat.js')
+    const root = document.getElementById('app')
+    renderChat(root, 'r1'); await flush(); await flush()
+    expect([...root.querySelectorAll('.tab-label')].map((e) => e.textContent)).toEqual(['Chats', 'Status', 'Calls'])
+    expect(root.querySelector('[aria-label="Record a voice note"]')).not.toBeNull()
+    root.querySelectorAll('.tab')[2].click(); await flush(); await flush()
+    expect(root.querySelector('.callsView, .tab-view:not([hidden])').textContent).toMatch(/bob|Recent calls|Former member/)
+    root.querySelectorAll('.tab')[1].click(); await flush(); await flush()
+    expect(root.textContent).toContain('My status')
+    teardownChat()
+  })
+  it('settings page renders switches and backgrounds', async () => {
+    const { state } = await import('../src/lib/state.js')
+    state.session = { user: { id: 'u1', email: 'a@b.co' } }; state.profile = ME
+    const { renderSettings } = await import('../src/pages/settings.js')
+    const root = document.getElementById('app'); await renderSettings(root); await flush()
+    for (const id of ['s-online', 's-seen', 's-receipts', 's-typing', 's-stories', 's-sound']) expect(root.querySelector('#' + id)).not.toBeNull()
+    expect(root.querySelectorAll('.bg-sw').length).toBeGreaterThanOrEqual(10)
+    root.querySelectorAll('.bg-sw')[4].click()
+    expect(document.documentElement.style.getPropertyValue('--chat-bg')).toContain('gradient')
   })
 })

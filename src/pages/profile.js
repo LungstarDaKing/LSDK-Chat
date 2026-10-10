@@ -28,13 +28,17 @@ async function downloadMyData() {
   const { data: memberships, error: e2 } = await supabase.from('participants')
     .select('role, joined_at, rooms(id, name, is_direct)').eq('profile_id', user.id)
   if (e2) throw e2
-  const { data: priv } = await supabase.from('user_private').select('show_online, show_last_seen, last_seen_at').eq('id', user.id).maybeSingle()
+  const { data: priv } = await supabase.from('user_private').select('show_online, show_last_seen, last_seen_at, share_stories, read_receipts').eq('id', user.id).maybeSingle()
+  const { data: myStories } = await supabase.from('stories').select('id, kind, content, attachment_name, created_at, expires_at').eq('author_id', user.id)
+  const { data: myCalls } = await supabase.from('calls').select('caller_id, callee_id, kind, status, created_at, answered_at, ended_at')
   const out = {
     exported_at: new Date().toISOString(),
     account: { id: user.id, email: user.email, created_at: user.created_at },
     profile: state.profile,
     presence_settings: priv,
     rooms: memberships,
+    status_updates_you_posted: myStories,
+    call_history: myCalls,
     messages_you_sent: messages.map(({ attachment_path, ...m }) => m),
     note: 'Files you sent (photos, videos, audio, PDFs) and your profile picture are not inside this JSON file; save them from the chats before deleting your account if you want to keep them.',
   }
@@ -51,15 +55,14 @@ async function deleteMyFiles(userId) {
   if (error) throw error
   for (const r of rooms) for (const p of await listFiles('media', `${r.room_id}/${userId}`)) paths.add(p)
   if (paths.size) await removeFiles('media', [...paths])
+  const sf = await listFiles('stories', userId)
+  if (sf.length) await removeFiles('stories', sf)
   await pruneAvatars(userId, null)
 }
 
 export async function renderProfile(root) {
   const p = state.profile
   const user = state.session.user
-  const { data: priv } = await supabase.from('user_private').select('show_online, show_last_seen').eq('id', user.id).maybeSingle()
-  let showOnline = priv?.show_online ?? true
-  let showSeen = (priv?.show_last_seen ?? true) && showOnline
 
   const setMsg = (el, t, kind = 'error') => { el.textContent = t; el.className = `msg ${t ? kind : ''}` }
 
@@ -102,20 +105,6 @@ export async function renderProfile(root) {
   const pw = h('input', { id: 'pw', type: 'password', minLength: 10, maxLength: 128, autocomplete: 'new-password' })
   const pwMsg = h('div', { class: 'msg', role: 'alert' })
 
-  /* --- privacy --- */
-  const privMsg = h('div', { class: 'msg', role: 'alert' })
-  const cbOnline = h('input', { id: 'cb-online', type: 'checkbox', checked: showOnline })
-  const cbSeen = h('input', { id: 'cb-seen', type: 'checkbox', checked: showSeen, disabled: !showOnline })
-  const savePriv = async () => {
-    const { error } = await supabase.rpc('set_privacy', { p_online: cbOnline.checked, p_last_seen: cbSeen.checked })
-    if (error) { setMsg(privMsg, friendlyError(error)); return }
-    cbSeen.disabled = !cbOnline.checked
-    if (!cbOnline.checked) cbSeen.checked = false
-    setMsg(privMsg, 'Saved.', 'success')
-  }
-  cbOnline.addEventListener('change', savePriv)
-  cbSeen.addEventListener('change', savePriv)
-
   const hasConsent = p.terms_version === TERMS_VERSION
   clear(root).append(h('main', { class: 'doc' },
     h('p', {}, h('a', { href: '#/chat' }, hasConsent ? '← Back to chats' : '← Back')),
@@ -143,11 +132,7 @@ export async function renderProfile(root) {
       h('p', { class: 'small' }, 'Both are visible to all signed-in users.'),
       unameMsg, h('button', { class: 'btn primary', type: 'submit' }, 'Save'))),
 
-    h('section', {}, h('h2', {}, 'Online status and last seen'),
-      h('label', { class: 'check', for: 'cb-online' }, cbOnline, ' Show when I am online to people I share a chat with'),
-      h('label', { class: 'check', for: 'cb-seen' }, cbSeen, ' Show my "last seen" time'),
-      privMsg,
-      h('p', { class: 'small' }, 'Turning online status off also hides last seen. It works both ways: if you hide yours, you cannot see other people\'s. Only people who share a chat with you can ever see it.')),
+    h('p', { class: 'small' }, 'Online, last seen, read receipts, backgrounds and sounds are in ', h('a', { href: '#/settings' }, 'Settings'), '.'),
 
     h('section', {}, h('h2', {}, 'Account'),
       h('p', {}, h('strong', {}, 'Email: '), user.email),

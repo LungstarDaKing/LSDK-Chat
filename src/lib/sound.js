@@ -64,3 +64,29 @@ export function notifyIncoming({ inCurrentRoom }) {
   ding()
   bumpTitle()
 }
+
+/* ---- ringtone for incoming calls (generated in the browser, no file needed) ---- */
+let ringTimer = null
+function ringOnce() {
+  if (!ctx) return
+  try {
+    ctx.resume?.()
+    const t = ctx.currentTime
+    const gain = ctx.createGain()
+    gain.gain.setValueAtTime(0.0001, t)
+    gain.gain.exponentialRampToValueAtTime(0.16, t + 0.03)
+    gain.gain.setValueAtTime(0.16, t + 0.5)
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.7)
+    gain.connect(ctx.destination)
+    for (const [f, s] of [[660, 0], [880, 0.25]]) {
+      const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.setValueAtTime(f, t + s)
+      o.connect(gain); o.start(t + s); o.stop(t + s + 0.25)
+    }
+  } catch { /* ignore */ }
+}
+export function startRingtone() {
+  stopRingtone()
+  if (!enabled) return
+  ringOnce(); ringTimer = setInterval(ringOnce, 2200)
+}
+export function stopRingtone() { if (ringTimer) clearInterval(ringTimer); ringTimer = null }
