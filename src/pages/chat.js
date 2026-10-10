@@ -4,6 +4,7 @@ import { CONFIG } from '../config.js'
 import { state, go } from '../lib/state.js'
 import { ACCEPT, kind, fmtSize, uploadAttachment, removeFiles, signedUrls, signedUrl, listFiles, resolveType } from '../lib/media.js'
 import { fetchStatuses, describeStatus } from '../lib/status.js'
+import { notifyIncoming, soundEnabled, setSoundEnabled } from '../lib/sound.js'
 
 const PAGE = 50
 const MAX_LEN = 1000
@@ -47,6 +48,15 @@ class Chat {
 
   /* ---------- DOM skeleton ---------- */
   build(root) {
+    this.soundBtn = h('button', { class: 'btn icon', type: 'button', onclick: () => { setSoundEnabled(!soundEnabled()); this.drawSound() } })
+    this.drawSound = () => {
+      const on = soundEnabled()
+      this.soundBtn.textContent = on ? '🔔' : '🔕'
+      this.soundBtn.title = on ? 'Message sound is on (click to mute)' : 'Message sound is off (click to turn on)'
+      this.soundBtn.setAttribute('aria-label', this.soundBtn.title)
+      this.soundBtn.setAttribute('aria-pressed', String(on))
+    }
+    this.drawSound()
     this.roomList = h('ul', { class: 'room-list', 'aria-label': 'Your chats' })
     this.banner = h('div', { class: 'banner', role: 'status', hidden: true }, 'Connection lost - reconnecting…')
     this.paneTitle = h('h2', { class: 'pane-title' })
@@ -90,6 +100,7 @@ class Chat {
           h('div', { class: 'row tight' },
             h('button', { class: 'btn icon', type: 'button', title: 'New direct chat', 'aria-label': 'New direct chat', onclick: () => this.newDirect() }, '✎'),
             h('button', { class: 'btn icon', type: 'button', title: 'New group', 'aria-label': 'New group', onclick: () => this.newGroup() }, '👥'),
+            this.soundBtn,
             h('a', { class: 'btn icon', href: '#/profile', title: 'My profile', 'aria-label': 'My profile' }, this.avatar(this.me.id, 'xs')))),
         this.banner,
         this.roomList,
@@ -407,7 +418,7 @@ class Chat {
   async onInsert(m) {
     if (!m) return
     const r = this.room(m.room_id)
-    if (!r) { this.loadRooms(); if (m.room_id !== this.currentId) this.unread.add(m.room_id); return }
+    if (!r) { this.loadRooms(); if (m.room_id !== this.currentId) this.unread.add(m.room_id); if (m.sender_id !== this.me.id) notifyIncoming({ inCurrentRoom: false }); return }
     r.last_message_at = m.created_at
     this.rooms.sort((a, b) => new Date(b.last_message_at) - new Date(a.last_message_at))
     if (m.room_id === this.currentId) {
@@ -415,7 +426,8 @@ class Chat {
       await this.ensurePeople([m.sender_id])
       this.messages.push(m)
       this.renderMessages(m.sender_id === this.me.id)
-    } else if (m.sender_id !== this.me.id) this.unread.add(m.room_id)
+      if (m.sender_id !== this.me.id) notifyIncoming({ inCurrentRoom: true })
+    } else if (m.sender_id !== this.me.id) { this.unread.add(m.room_id); notifyIncoming({ inCurrentRoom: false }) }
     this.renderRooms()
   }
   onUpdate(m) {

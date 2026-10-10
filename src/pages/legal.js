@@ -63,7 +63,7 @@ const PRIVACY = () => [
     'Activity data: a "last active" timestamp, refreshed about once a minute while the app is open in a visible browser tab, and your online / last-seen settings.',
     'Technical data: your IP address, browser/device information and timestamps are processed in the server logs of our providers (Supabase and GitHub) when you use the Service or sign in. We do not build profiles from them, but we may look at them to investigate abuse or security problems.',
     'Photos you send are re-saved by your browser before upload, which removes location and camera details (EXIF). Videos, audio, PDFs and text files are uploaded unchanged and may contain such details.',
-    'On your device: the sign-in session (an access token) is kept in your browser\'s local storage so you stay signed in. We use no advertising or analytics cookies or trackers, and load no third-party fonts, scripts or images.'] },
+    'On your device: the sign-in session (an access token) is kept in your browser\'s local storage so you stay signed in, plus your message-sound on/off choice. We use no advertising or analytics cookies or trackers, and load no third-party fonts, scripts or images.'] },
   { h: '3. Why we use it', ul: [
     'To provide the Service: create your account, authenticate you, deliver messages to the right people (performance of the agreement with you).',
     'To keep the Service safe: rate-limiting, handling reports, investigating abuse, and preventing unauthorised access (our legitimate interests).',
