@@ -16,6 +16,10 @@ import { reactToMessage, loadReactions, setReaction, summarize } from '../lib/re
 import { attachHold, openReactSheet } from '../ui/react-sheet.js'
 import { personalSection } from '../ui/person-prefs.js'
 import { setChatPeer } from '../lib/theme.js'
+import { getNotesRoom, setMarkedUnread, loadMarkedUnread, saveMessage, listSaved, setReminder, scheduleMessage } from '../lib/tools.js'
+import { whenDialog, saveDialog } from '../ui/when-dialog.js'
+import { dictationSupported, startDictation, commandOf } from '../lib/dictation.js'
+import { getA11y } from '../lib/a11y.js'
 
 const PAGE = 50
 const MAX_LEN = 1000
@@ -23,12 +27,12 @@ const MSG_COLS = 'id, room_id, sender_id, content, created_at, edited_at, attach
 
 let chat = null
 export function teardownChat() { if (chat) chat.destroy(); chat = null }
-export function renderChat(root, roomId) {
+export function renderChat(root, roomId, msgId = null) {
   if (!chat || !root.contains(chat.el)) {
     teardownChat()
     chat = new Chat(root)
   }
-  chat.open(roomId)
+  chat.open(roomId, msgId)
 }
 
 const escapeLike = (s) => s.replace(/[\\%_]/g, (c) => '\\' + c)
@@ -43,6 +47,8 @@ class Chat {
     this.people = new Map([[this.me.id, { username: this.me.username, avatar_path: this.me.avatar_path, bio: this.me.bio }]])
     this.status = new Map()
     this.unread = new Map()
+    this.flags = new Set()
+    this.dictStop = null
     this.reads = new Map()
     this.typers = new Map()
     this.players = new Map()
@@ -87,7 +93,7 @@ class Chat {
     this.voiceCallBtn = h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Voice call', title: 'Voice call', onclick: () => this.callPeer(this.peerOf(this.room()), 'voice') }, '📞')
     this.videoCallBtn = h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Video call', title: 'Video call', onclick: () => this.callPeer(this.peerOf(this.room()), 'video') }, '🎥')
     this.infoBtn = h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Chat info', title: 'Chat info', onclick: () => this.openInfo() }, 'ⓘ')
-    this.messagesEl = h('div', { class: 'messages', role: 'log', 'aria-live': 'polite', 'aria-label': 'Messages' })
+    this.messagesEl = h('div', { class: 'messages', role: 'log', 'aria-live': getA11y().announce ? 'polite' : 'off', 'aria-label': 'Messages' })
     this.typingRow = h('div', { class: 'msg-row other typing-row', 'aria-hidden': 'true' }, h('div', { class: 'bubble typing-bubble' }, h('i'), h('i'), h('i')))
     this.fileInput = h('input', { type: 'file', accept: ACCEPT, hidden: true, 'aria-label': 'Choose a file to send',
       onchange: () => { const f = this.fileInput.files[0]; this.fileInput.value = ''; if (f) this.askSendFile(f) } })
@@ -108,13 +114,15 @@ class Chat {
     })
     this.counter = h('span', { class: 'counter' })
     this.sendBtn = h('button', { class: 'btn primary round send', type: 'button', 'aria-label': 'Send', title: 'Send', onclick: () => this.send() }, '➤')
+    this.schedBtn = h('button', { class: 'btn icon ghost', type: 'button', title: 'Send later', 'aria-label': 'Send this message later', onclick: () => this.scheduleDialog() }, '🗓')
+    this.dictBtn = h('button', { class: 'btn icon ghost', type: 'button', title: 'Dictate (speak to type)', 'aria-label': 'Dictate: speak to type', 'aria-pressed': 'false', onclick: () => this.toggleDictation() }, '🗣')
     this.micBtn = h('button', { class: 'btn primary round send', type: 'button', 'aria-label': 'Record a voice note', title: 'Record a voice note', onclick: () => this.startVoice() }, '🎤')
     this.recTime = h('span', { class: 'rec-time' }, '0:00')
     this.recBar = h('div', { class: 'rec-bar', hidden: true },
       h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Discard recording', title: 'Discard', onclick: () => this.cancelVoice() }, '🗑'),
       h('span', { class: 'rec-dot', 'aria-hidden': 'true' }), this.recTime, h('span', { class: 'small grow' }, 'Recording…'),
       h('button', { class: 'btn primary round send', type: 'button', 'aria-label': 'Send voice note', title: 'Send voice note', onclick: () => this.finishVoice() }, '➤'))
-    this.composerMain = h('div', { class: 'composer-main' }, this.attachBtn, this.fileInput, this.input, this.counter, this.sendBtn, this.micBtn)
+    this.composerMain = h('div', { class: 'composer-main' }, this.attachBtn, this.fileInput, this.input, this.counter, this.dictBtn, this.schedBtn, this.sendBtn, this.micBtn)
     this.replyBar = h('div', { class: 'reply-bar', hidden: true })
     this.composer = h('div', { class: 'composer' }, this.replyBar, this.composerMain, this.recBar)
     this.syncSendMic()
@@ -133,10 +141,13 @@ class Chat {
     })
 
     this.el = h('div', { class: 'chat' },
+      h('a', { class: 'skip-link', href: '#/chat', onclick: (e) => { e.preventDefault(); (this.currentId ? this.input : this.roomList.querySelector('a'))?.focus() } }, 'Skip to conversation'),
       h('aside', { class: 'sidebar' },
         h('header', { class: 'side-head' },
           h('strong', { class: 'app-name' }, CONFIG.appName),
           h('div', { class: 'row tight' },
+            h('button', { class: 'btn icon ghost', type: 'button', title: 'Notes to myself', 'aria-label': 'Notes to myself', onclick: () => this.openNotes() }, '📝'),
+            h('a', { class: 'btn icon ghost', href: '#/tools', title: 'Search, library, saved, reminders, scheduled', 'aria-label': 'Tools: search, library, saved, reminders, scheduled' }, '🧰'),
             h('button', { class: 'btn icon ghost', type: 'button', title: 'New direct chat', 'aria-label': 'New direct chat', onclick: () => this.newDirect() }, '✎'),
             h('button', { class: 'btn icon ghost', type: 'button', title: 'New group', 'aria-label': 'New group', onclick: () => this.newGroup() }, '👥'),
             h('a', { class: 'btn icon ghost', href: '#/settings', title: 'Settings and profile', 'aria-label': 'Settings and profile' }, this.avatar(this.me.id, 'xs')))),
@@ -170,6 +181,8 @@ class Chat {
   syncSendMic() {
     const has = !!this.input.value.trim()
     this.sendBtn.hidden = !has
+    this.schedBtn.hidden = !has
+    this.dictBtn.hidden = !dictationSupported()
     this.micBtn.hidden = has || !voiceSupported()
   }
 
@@ -192,6 +205,7 @@ class Chat {
   }
 
   destroy() {
+    this.stopDictation()
     this.alive = false
     clearInterval(this.poll)
     document.removeEventListener('visibilitychange', this.onVis)
@@ -328,7 +342,7 @@ class Chat {
   /* ---------- rooms ---------- */
   async loadRooms() {
     const { data, error } = await supabase.from('rooms')
-      .select('id, name, is_direct, last_message_at, participants(profile_id, role, joined_at, profiles(username, avatar_path, bio))')
+      .select('id, name, is_direct, notes_owner, last_message_at, participants(profile_id, role, joined_at, profiles(username, avatar_path, bio))')
       .order('last_message_at', { ascending: false })
     if (!this.alive) return
     if (error) { toast(friendlyError(error), 'error'); return }
@@ -347,6 +361,7 @@ class Chat {
   room(id = this.currentId) { return this.rooms.find((r) => r.id === id) }
   peerOf(r) { return r.is_direct ? r.participants.find((p) => p.profile_id !== this.me.id)?.profile_id : null }
   title(r) {
+    if (r.notes_owner) return 'Notes to myself'
     if (!r.is_direct) return r.name
     return this.people.get(this.peerOf(r))?.username || 'Direct chat'
   }
@@ -354,6 +369,7 @@ class Chat {
 
   roomAvatar(r, size = '') {
     const peer = this.peerOf(r)
+    if (r.notes_owner) return h('span', { class: `avatar ${size}`, 'aria-hidden': 'true' }, '📝')
     const el = peer ? this.avatar(peer, size) : h('span', { class: `avatar ${size}`, 'aria-hidden': 'true' }, (r.name || '?').slice(0, 1).toUpperCase())
     if (!peer) return el
     const wrap = h('span', { class: 'avatar-wrap' }, el, this.dot(peer))
@@ -364,6 +380,7 @@ class Chat {
     clear(this.roomList)
     let total = 0
     for (const n of this.unread.values()) total += n
+    for (const id of this.flags) if (!this.unread.has(id) && id !== this.currentId) total += 1
     this.badges.chats.textContent = total > 99 ? '99+' : String(total || '')
     this.badges.chats.hidden = !total
     if (!this.rooms.length) {
@@ -372,15 +389,21 @@ class Chat {
     }
     for (const r of this.rooms) {
       const n = this.unread.get(r.id) || 0
+      const flagged = this.flags.has(r.id) && r.id !== this.currentId
       const peer = this.peerOf(r)
-      const sub = r.is_direct ? (describeStatus(this.status.get(peer)) || 'Direct chat') : `${r.participants.length} members`
-      this.roomList.append(h('li', {},
-        h('a', { class: `room-item${r.id === this.currentId ? ' active' : ''}${n ? ' unread' : ''}`, href: `#/chat/${r.id}`, 'aria-current': r.id === this.currentId ? 'true' : null },
-          this.roomAvatar(r, 'md'),
-          h('span', { class: 'room-meta' },
-            h('span', { class: 'room-name' }, this.title(r)),
-            h('span', { class: 'room-sub' }, sub)),
-          n > 0 && h('span', { class: 'count', 'aria-label': `${n} unread` }, n > 99 ? '99+' : n))))
+      const sub = r.notes_owner ? 'Only you can see this chat' : r.is_direct ? (describeStatus(this.status.get(peer)) || 'Direct chat') : `${r.participants.length} members`
+      let held = false
+      const link = h('a', { class: `room-item${r.id === this.currentId ? ' active' : ''}${n || flagged ? ' unread' : ''}${flagged ? ' flagged' : ''}`, href: `#/chat/${r.id}`, 'aria-current': r.id === this.currentId ? 'true' : null,
+          onclick: (e) => { if (held) { e.preventDefault(); held = false } } },
+        this.roomAvatar(r, 'md'),
+        h('span', { class: 'room-meta' },
+          h('span', { class: 'room-name' }, this.title(r)),
+          h('span', { class: 'room-sub' }, sub)),
+        n > 0 && h('span', { class: 'count', 'aria-label': `${n} unread` }, n > 99 ? '99+' : n),
+        !n && flagged && h('span', { class: 'count dot', 'aria-label': 'Marked as unread' }, '•'))
+      attachHold(link, () => { held = true; setTimeout(() => { held = false }, 700); this.roomMenu(r) })
+      this.roomList.append(h('li', { class: 'room-li' }, link,
+        h('button', { class: 'room-more', type: 'button', 'aria-label': `Options for ${this.title(r)}`, onclick: () => this.roomMenu(r) }, '⋯')))
     }
     this.hydrateAvatars(this.roomList)
   }
@@ -392,7 +415,8 @@ class Chat {
     const peer = this.peerOf(r)
     setChatPeer(peer)
     if (!this.typers.size) {
-      this.paneSub.textContent = r.is_direct
+      this.paneSub.textContent = r.notes_owner ? 'Only you can see this chat'
+        : r.is_direct
         ? (describeStatus(this.status.get(peer)) || 'Direct chat')
         : r.participants.map((p) => this.nameOf(p.profile_id)).join(', ')
     }
@@ -409,16 +433,17 @@ class Chat {
     const m = new Map()
     for (const r of data) if (r.unread > 0 && r.room_id !== this.currentId) m.set(r.room_id, r.unread)
     this.unread = m
+    try { const f = await loadMarkedUnread(); f.delete(this.currentId); if (this.alive) this.flags = f } catch { /* v0.7 SQL not run yet */ }
   }
 
   /* ---------- open a room ---------- */
-  async open(roomId) {
+  async open(roomId, msgId = null) {
     if (!roomId) {
       this.events.leave(); this.clearTypers()
       this.currentId = null; setChatPeer(null); this.messages = []; this.setPaneVisible(false); this.renderRooms(); return
     }
     if (this.tab !== 'chats') this.setTab('chats')
-    if (roomId === this.currentId) { this.setPaneVisible(true); return }
+    if (roomId === this.currentId) { this.setPaneVisible(true); if (msgId) this.jumpTo(msgId); return }
     if (!this.room(roomId)) {
       await this.loadRooms()
       if (!this.room(roomId)) { toast('Chat not found.', 'error'); return go('#/chat') }
@@ -428,6 +453,8 @@ class Chat {
     this.setReply(null)
     this.currentId = roomId
     this.unread.delete(roomId)
+    this.stopDictation()
+    if (this.flags.has(roomId)) { this.flags.delete(roomId); setMarkedUnread(roomId, false).catch(() => {}) }
     this.editingId = null
     this.messages = []
     this.reads = new Map()
@@ -442,7 +469,8 @@ class Chat {
     this.markRead()
     this.loadReads()
     this.holdTip()
-    this.input.focus({ preventScroll: true })
+    if (msgId) this.jumpTo(msgId)
+    else this.input.focus({ preventScroll: true })
   }
 
   async loadMessages(scrollDown) {
@@ -595,8 +623,13 @@ class Chat {
         this.reactionsEl(m),
         h('div', { class: 'foot' }, fmtTime(m.created_at), m.edited_at && ' · edited', own && this.ticks(m)),
         actions)
-    if (!editing) attachHold(bubble, (el) => this.openMenu(m, el, own, iAmAdmin))
-    return h('div', { class: `msg-row ${own ? 'own' : 'other'}${grouped ? ' grouped' : ''}`, dataset: { id: m.id } }, bubble)
+    if (!editing) {
+      attachHold(bubble, (el) => this.openMenu(m, el, own, iAmAdmin))
+      bubble.tabIndex = 0
+      bubble.setAttribute('aria-label', `${own ? 'You' : this.nameOf(m.sender_id)}, ${fmtTime(m.created_at)}: ${m.content || (m.attachment_name ? 'attachment ' + m.attachment_name : '')}. Press Enter for actions.`)
+      bubble.addEventListener('keydown', (e) => { if (e.target === bubble && (e.key === 'Enter' || e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10'))) { e.preventDefault(); this.openMenu(m, bubble, own, iAmAdmin) } })
+    }
+    return h('div', { class: `msg-row ${own ? 'own' : 'other'}${grouped ? ' grouped' : ''}${m.id === this.flashId ? ' flash' : ''}`, dataset: { id: m.id } }, bubble)
   }
 
   /* ---------- replies ---------- */
@@ -638,7 +671,11 @@ class Chat {
   async jumpTo(id) {
     for (let i = 0; i < 6; i++) {
       const row = this.messagesEl.querySelector(`.msg-row[data-id="${id}"]`)
-      if (row) { row.scrollIntoView({ block: 'center', behavior: 'smooth' }); row.classList.add('flash'); setTimeout(() => row.classList.remove('flash'), 1800); return }
+      if (row) {
+        this.stick = false; this.flashId = id; clearTimeout(this.flashT)
+        row.scrollIntoView({ block: 'center', behavior: 'smooth' }); row.classList.add('flash')
+        this.flashT = setTimeout(() => { this.flashId = null; this.messagesEl.querySelector('.msg-row.flash')?.classList.remove('flash') }, 2200); return
+      }
       if (!this.hasMore) break
       await this.loadOlder()
     }
@@ -668,6 +705,8 @@ class Chat {
       anchor: bubble, current: mineNow, onPick: (e) => this.react(m, e),
       actions: [
         { icon: '↩', label: 'Reply', onClick: () => this.setReply(m) },
+        { icon: '⏰', label: 'Remind me…', onClick: () => this.remindDialog(m) },
+        { icon: '🔖', label: 'Save message…', onClick: () => this.saveMessageDialog(m) },
         m.content && { icon: '⧉', label: 'Copy text', onClick: () => navigator.clipboard?.writeText(m.content).then(() => toast('Copied', 'success'), () => toast('Could not copy.', 'error')) },
         m.attachment_path && { icon: '⬇', label: 'Save file', onClick: () => this.saveAttachment(m) },
         own && { icon: '✎', label: m.attachment_path ? 'Edit caption' : 'Edit', onClick: () => { this.editingId = m.id; this.renderMessages(false) } },
@@ -997,6 +1036,89 @@ class Chat {
     if (files.length) await removeFiles('media', files)
   }
 
+  /* ---------- v0.7: smart tools ---------- */
+  async openNotes() {
+    try { const id = await getNotesRoom(); await this.loadRooms(); go(`#/chat/${id}`) } catch (e) { toast(friendlyError(e), 'error') }
+  }
+
+  roomMenu(r) {
+    let d
+    const item = (label, fn) => h('button', { class: 'btn block', type: 'button', onclick: () => { d.close(); fn() } }, label)
+    d = dialog({ title: this.title(r), body: h('div', { class: 'menu-list' },
+      item('Open chat', () => go(`#/chat/${r.id}`)),
+      this.flags.has(r.id) ? item('Mark as read', () => this.markRead2(r)) : item('Mark as unread', () => this.markUnread(r))),
+    actions: [{ label: 'Close' }] })
+  }
+  async markUnread(r) {
+    try { await setMarkedUnread(r.id, true) } catch (e) { return toast(friendlyError(e), 'error') }
+    this.flags.add(r.id)
+    if (r.id === this.currentId) { this.currentId = null; this.events.leave(); this.setPaneVisible(false); go('#/chat') }
+    this.renderRooms(); toast('Marked as unread', 'success')
+  }
+  async markRead2(r) {
+    this.flags.delete(r.id); this.renderRooms()
+    try { await setMarkedUnread(r.id, false) } catch (e) { toast(friendlyError(e), 'error') }
+  }
+
+  remindDialog(m) {
+    whenDialog({ title: 'Remind me about this message', intro: 'You will get a reminder while LSDK Chat is open (or when you next open it). Only you can see it.',
+      confirmLabel: 'Set reminder', onPick: async (when) => { await setReminder(m.id, when); toast('Reminder set', 'success') } })
+  }
+  async saveMessageDialog(m) {
+    let cols = []
+    try { cols = [...new Set((await listSaved()).map((x) => x.collection))] } catch { /* ignore */ }
+    saveDialog({ collections: cols, onSave: (name) => saveMessage(m.id, name) })
+  }
+  scheduleDialog() {
+    const text = this.input.value.trim()
+    const r = this.room(); if (!r) return
+    if (!text) return toast('Write a message first, then press 🗓.', 'info')
+    const peerName = r.is_direct ? this.nameOf(this.peerOf(r)) : null
+    const cb = peerName ? h('input', { type: 'checkbox', id: 'when-online' }) : null
+    const extra = peerName ? h('label', { class: 'check', for: 'when-online' }, cb, h('span', {}, ` Instead, send it the next time ${peerName} is online (only works if you both share online status)`)) : null
+    whenDialog({ title: 'Send later', intro: 'The message is sent for you at that time, even if you close the app.', extra, confirmLabel: 'Schedule',
+      onPick: async (when) => {
+        await scheduleMessage({ room: r.id, content: text, at: when, whenOnline: !!cb?.checked, replyTo: this.replyTo?.id })
+        this.input.value = ''; this.input.style.height = 'auto'; this.syncSendMic(); this.setReply(null)
+        toast(cb?.checked ? `Will send when ${peerName} comes online` : `Scheduled for ${when.toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}`, 'success')
+      } })
+  }
+
+  /* ---------- dictation ---------- */
+  stopDictation() {
+    try { this.dictStop?.() } catch { /* ignore */ }
+    this.dictStop = null
+    if (this.dictBtn) { this.dictBtn.classList.remove('listening'); this.dictBtn.setAttribute('aria-pressed', 'false'); this.dictBtn.title = 'Dictate (speak to type)' }
+    if (this.input) this.input.placeholder = 'Write a message…'
+  }
+  toggleDictation() {
+    if (this.dictStop) return this.stopDictation()
+    const a = getA11y()
+    if (!this.dictNotice) { this.dictNotice = true; toast('Dictation uses your browser\'s speech service, which may send your voice to its maker.', 'info') }
+    this.dictBtn.classList.add('listening'); this.dictBtn.setAttribute('aria-pressed', 'true'); this.dictBtn.title = 'Stop dictation'
+    this.input.placeholder = 'Listening…'
+    this.dictStop = startDictation({
+      lang: a.lang,
+      onInterim: (t) => { this.input.placeholder = t ? `🎙 ${t}` : 'Listening…' },
+      onFinal: (text) => {
+        const cmd = getA11y().commands ? commandOf(text) : null
+        if (cmd === 'send') { this.stopDictation(); this.send(); return }
+        if (cmd === 'clear') { this.input.value = ''; this.syncSendMic(); return }
+        if (cmd === 'stop') { this.stopDictation(); return }
+        const cur = this.input.value
+        this.input.value = (cur + (cur && !/\s$/.test(cur) ? ' ' : '') + text).slice(0, MAX_LEN)
+        this.input.dispatchEvent(new Event('input'))
+      },
+      onEnd: () => { if (this.dictStop) this.stopDictation() },
+      onError: (e) => {
+        if (e === 'no-speech' || e === 'aborted') return
+        toast({ 'not-allowed': 'The microphone is blocked. Allow it in your browser settings.', 'service-not-allowed': 'Your browser does not allow dictation here.',
+          'language-not-supported': 'Your browser cannot dictate in that language. Choose another in Settings → Accessibility.', network: 'Dictation needs an internet connection.' }[e] || 'Dictation stopped.', 'error')
+        this.stopDictation()
+      },
+    })
+  }
+
   openInfo() {
     const r0 = this.room(); if (!r0) return
     const body = h('div', {})
@@ -1012,6 +1134,8 @@ class Chat {
       const r = this.room(rid); if (!r) { d?.close(); return }
       const admin = this.myRole(r) === 'admin' && !r.is_direct
       clear(body)
+      body.append(h('button', { class: 'btn small', type: 'button', onclick: () => { d.close(); this.markUnread(r) } }, 'Mark this chat as unread'))
+      if (r.notes_owner) { body.append(h('p', { class: 'small' }, 'This is your private notepad. Only you can see it and nobody can be added. Write reminders, links and drafts here; you can also save files to it.')); return }
       if (admin) {
         const rn = h('input', { type: 'text', value: r.name, maxLength: 60, 'aria-label': 'Room name' })
         body.append(h('div', { class: 'row' }, rn, h('button', { class: 'btn', type: 'button', onclick: () => rpc('rename_room', { p_room: rid, new_name: rn.value }, 'Renamed') }, 'Rename')))
@@ -1046,7 +1170,7 @@ class Chat {
         } }, 'Leave group'))
       } else body.append(h('p', { class: 'small' }, 'Direct chats cannot be left. To stop receiving messages, report the message or contact the operator.'))
     }
-    d = dialog({ title: r0.is_direct ? `Chat with ${this.title(r0)}` : r0.name, body, wide: true, actions: [{ label: 'Close' }] })
+    d = dialog({ title: r0.notes_owner ? 'Notes to myself' : r0.is_direct ? `Chat with ${this.title(r0)}` : r0.name, body, wide: true, actions: [{ label: 'Close' }] })
     draw()
   }
 }

@@ -33,6 +33,9 @@ async function downloadMyData() {
   const { data: myCalls } = await supabase.from('calls').select('caller_id, callee_id, kind, status, created_at, answered_at, ended_at')
   const { data: myComments } = await supabase.from('story_comments').select('story_id, content, created_at').eq('user_id', user.id)
   const { data: myReactions } = await supabase.from('message_reactions').select('message_id, emoji, created_at').eq('user_id', user.id)
+  const { data: mySaved } = await supabase.from('saved_items').select('message_id, collection, created_at')
+  const { data: myReminders } = await supabase.from('message_reminders').select('message_id, remind_at')
+  const { data: myScheduled } = await supabase.from('scheduled_messages').select('room_id, content, send_at, when_online, status, created_at')
   const out = {
     exported_at: new Date().toISOString(),
     account: { id: user.id, email: user.email, created_at: user.created_at },
@@ -43,6 +46,9 @@ async function downloadMyData() {
     call_history: myCalls,
     status_comments_you_wrote: myComments,
     message_reactions_you_gave: myReactions,
+    saved_messages: mySaved,
+    message_reminders: myReminders,
+    scheduled_messages: myScheduled,
     messages_you_sent: messages.map(({ attachment_path, ...m }) => m),
     note: 'Files you sent (photos, videos, audio, PDFs) and your profile picture are not inside this JSON file; save them from the chats before deleting your account if you want to keep them.',
   }

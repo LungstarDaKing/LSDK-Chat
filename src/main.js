@@ -8,6 +8,11 @@ import { renderAuth, renderReset } from './pages/auth.js'
 import { renderChat, teardownChat } from './pages/chat.js'
 import { renderProfile } from './pages/profile.js'
 import { renderSettings } from './pages/settings.js'
+import { renderTools } from './pages/tools.js'
+import { startReminderWatcher, stopReminderWatcher, previewText } from './lib/tools.js'
+import { likeChime } from './lib/sound.js'
+import { dialog } from './lib/dom.js'
+import './lib/a11y.js'
 import { renderLegal } from './pages/legal.js'
 import { renderConsent } from './pages/consent.js'
 import { startHeartbeat, stopHeartbeat } from './lib/status.js'
@@ -25,14 +30,22 @@ const root = document.getElementById('app')
 supabase.auth.onAuthStateChange((event, s) => {
   state.session = s
   if (event === 'PASSWORD_RECOVERY') state.recovering = true
-  if (event === 'SIGNED_OUT') { state.profile = null; state.recovering = false; teardownChat(); stopHeartbeat() }
+  if (event === 'SIGNED_OUT') { state.profile = null; state.recovering = false; teardownChat(); stopHeartbeat(); stopReminderWatcher(); watching = false }
   if (['SIGNED_IN', 'SIGNED_OUT', 'PASSWORD_RECOVERY'].includes(event)) setTimeout(route, 0)
 })
+
+let watching = false
+function showReminder(r) {
+  const m = r.messages
+  try { likeChime(true) } catch { /* sound is optional */ }
+  dialog({ title: '⏰ Reminder', body: [h('p', {}, previewText(m, 300))],
+    actions: [{ label: 'Dismiss' }, ...(m ? [{ label: 'Open chat', kind: 'primary', onClick: () => { location.hash = `#/chat/${m.room_id}/${m.id}` } }] : [])] })
+}
 
 const PUBLIC = new Set(['login', 'register', 'forgot', 'terms', 'privacy', 'disclosures'])
 
 async function route() {
-  const [name = '', arg] = (location.hash.replace(/^#\/?/, '') || '').split('/')
+  const [name = '', arg, arg2] = (location.hash.replace(/^#\/?/, '') || '').split('/')
   const legal = ['terms', 'privacy', 'disclosures'].includes(name)
 
   if (state.recovering && state.session) { teardownChat(); return renderReset(root) }
@@ -55,10 +68,12 @@ async function route() {
     return renderConsent(root, !!state.profile?.terms_version)
   }
   startHeartbeat()
+  if (!watching) { watching = true; startReminderWatcher(showReminder) }
   if (['login', 'register', 'forgot', ''].includes(name)) return go('#/chat')
   if (name === 'profile') { teardownChat(); return renderProfile(root) }
   if (name === 'settings') { teardownChat(); return renderSettings(root) }
-  if (name === 'chat') return renderChat(root, arg || null)
+  if (name === 'tools') { teardownChat(); return renderTools(root, arg || 'search') }
+  if (name === 'chat') return renderChat(root, arg || null, arg2 || null)
   return go('#/chat')
 }
 

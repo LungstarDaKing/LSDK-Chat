@@ -6,6 +6,8 @@ import { STOCK, MAX_CUSTOM, getPrefs, setDefaultTone, listCustom, addCustomTone,
 import { typingEnabled, setTypingEnabled } from '../lib/room-events.js'
 import { clearCallLog } from '../lib/calls.js'
 import { state } from '../lib/state.js'
+import { TEXT_SIZES, DICTATION_LANGS, getA11y, setA11y } from '../lib/a11y.js'
+import { dictationSupported } from '../lib/dictation.js'
 
 export async function renderSettings(root) {
   const uid = state.session.user.id
@@ -59,6 +61,26 @@ export async function renderSettings(root) {
   }
   drawTones()
 
+  /* ----- accessibility (this device only) ----- */
+  const A = getA11y()
+  const sizeRow = h('div', { class: 'seg wrap', role: 'radiogroup', 'aria-label': 'Text size' })
+  const drawSize = () => { const cur = getA11y().size; clear(sizeRow); for (const [v, name] of TEXT_SIZES) sizeRow.append(h('button', { type: 'button', role: 'radio', 'aria-checked': String(cur === v), class: cur === v ? 'on' : '', onclick: () => { setA11y('size', v); drawSize() } }, name)) }
+  drawSize()
+  const contrast = toggle('s-contrast', 'High contrast', 'Stronger text colours and thicker outlines. Saved on this device only.', A.contrast === 'high', (cb) => { setA11y('contrast', cb.checked ? 'high' : 'normal'); flash('Saved') })
+  const motion = toggle('s-motion', 'Reduce motion', 'Turns off animations such as typing bubbles and pop-ins. (Your device setting is also respected.)', A.motion === 'reduce', (cb) => { setA11y('motion', cb.checked ? 'reduce' : 'system'); flash('Saved') })
+  const announce = toggle('s-announce', 'Screen reader: read out new messages', 'New messages in the open chat are announced automatically. Turn off if it is too chatty.', A.announce, (cb) => { setA11y('announce', cb.checked); flash('Saved') })
+  const cmds = toggle('s-cmds', 'Voice commands while dictating', 'Say "send", "clear" or "stop" (English) while dictating to control the message box.', A.commands, (cb) => { setA11y('commands', cb.checked); flash('Saved') })
+  const langSel = h('select', { id: 's-dictlang', 'aria-label': 'Dictation language' }, DICTATION_LANGS.map(([v, n]) => h('option', { value: v, selected: v === A.lang }, n)))
+  langSel.addEventListener('change', () => { setA11y('lang', langSel.value); flash('Saved') })
+  const accessibility = h('section', {}, h('h2', {}, 'Accessibility'),
+    h('div', { class: 'field' }, h('label', {}, 'Text size'), sizeRow),
+    contrast.el, motion.el, announce.el,
+    dictationSupported()
+      ? h('div', {}, h('div', { class: 'field' }, h('label', { for: 's-dictlang' }, 'Dictation language (🗣 button in a chat)'), langSel,
+          h('p', { class: 'small' }, 'Dictation uses your browser\'s speech service (the audio may go to its maker, e.g. Google or Apple). Which languages work depends on the browser; isiZulu, isiXhosa and Sesotho support varies and may not work. I cannot guarantee it.')), cmds.el)
+      : h('p', { class: 'small' }, 'Dictation (speak to type) is not available in this browser. Chrome, Edge and Safari support it.'),
+    h('p', { class: 'small' }, 'Keyboard and screen readers: press Tab to reach a message and Enter for its actions (reply, react, save, remind). In the chat list press the ⋯ button for options. Captions for voice notes and videos are not available yet.'))
+
   /* ----- appearance (this device only) ----- */
   const themeRow = h('div', { class: 'seg', role: 'radiogroup', 'aria-label': 'Theme' })
   const drawTheme = () => { clear(themeRow); for (const t of THEMES) themeRow.append(h('button', { type: 'button', role: 'radio', 'aria-checked': String(getTheme() === t.id), class: getTheme() === t.id ? 'on' : '', onclick: () => { setTheme(t.id); drawTheme() } }, t.name)) }
@@ -110,6 +132,7 @@ export async function renderSettings(root) {
       dimBox,
       h('p', { class: 'small' }, 'Backgrounds and your picture are stored only on this device (in this browser). Nothing is uploaded, and other people do not see your background.')),
     h('section', {}, h('h2', {}, 'Notifications'), sound.el, likeSound.el),
+    accessibility,
     h('section', {}, h('h2', {}, 'Ringtones'),
       h('p', { class: 'small' }, 'Pick the sound for incoming calls. Press Play to hear it. You can add your own audio file (up to 30 seconds and 3 MB). Ringtones are stored only on this device.'),
       toneBox,
