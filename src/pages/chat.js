@@ -9,6 +9,8 @@ import { RoomEvents, typingEnabled } from '../lib/room-events.js'
 import { startRecording, voiceSupported, fmtDuration } from '../lib/voice.js'
 import { CallManager, supabaseCallApi, callsSupported } from '../lib/calls.js'
 import { CallOverlay, renderCalls } from '../ui/calls-ui.js'
+import { GroupCallManager, supabaseGroupApi } from '../lib/group-calls.js'
+import { GroupCallOverlay } from '../ui/group-call-ui.js'
 import { renderUpdates } from '../ui/stories-ui.js'
 import { sweepMyStories, markStatusSeen, newActivityCount } from '../lib/stories.js'
 import { likeChime, likeSoundEnabled } from '../lib/sound.js'
@@ -90,8 +92,8 @@ class Chat {
     this.paneTitle = h('h2', { class: 'pane-title' })
     this.paneSub = h('div', { class: 'pane-sub' })
     this.paneAvatar = h('span', { class: 'avatar sm' })
-    this.voiceCallBtn = h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Voice call', title: 'Voice call', onclick: () => this.callPeer(this.peerOf(this.room()), 'voice') }, '📞')
-    this.videoCallBtn = h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Video call', title: 'Video call', onclick: () => this.callPeer(this.peerOf(this.room()), 'video') }, '🎥')
+    this.voiceCallBtn = h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Voice call', title: 'Voice call', onclick: () => this.callRoom('voice') }, '📞')
+    this.videoCallBtn = h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Video call', title: 'Video call', onclick: () => this.callRoom('video') }, '🎥')
     this.infoBtn = h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Chat info', title: 'Chat info', onclick: () => this.openInfo() }, 'ⓘ')
     this.messagesEl = h('div', { class: 'messages', role: 'log', 'aria-live': getA11y().announce ? 'polite' : 'off', 'aria-label': 'Messages' })
     this.typingRow = h('div', { class: 'msg-row other typing-row', 'aria-hidden': 'true' }, h('div', { class: 'bubble typing-bubble' }, h('i'), h('i'), h('i')))
@@ -127,12 +129,13 @@ class Chat {
     this.composer = h('div', { class: 'composer' }, this.replyBar, this.composerMain, this.recBar)
     this.syncSendMic()
     this.empty = h('div', { class: 'empty' }, h('div', { class: 'empty-art', 'aria-hidden': 'true' }, '💬'), h('h2', {}, CONFIG.appName), h('p', {}, 'Select a chat, or start a new one.'))
+    this.callBanner = h('div', { class: 'call-banner', hidden: true })
     this.pane = h('section', { class: 'pane' },
       h('header', { class: 'pane-head' },
         h('button', { class: 'btn icon ghost back', type: 'button', 'aria-label': 'Back to chats', onclick: () => go('#/chat') }, '←'),
         this.paneAvatar,
         h('div', { class: 'pane-titles' }, this.paneTitle, this.paneSub), this.voiceCallBtn, this.videoCallBtn, this.infoBtn),
-      this.messagesEl, this.composer)
+      this.callBanner, this.messagesEl, this.composer)
     // drag & drop a file onto the conversation
     this.pane.addEventListener('dragover', (e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault() })
     this.pane.addEventListener('drop', (e) => {
@@ -195,6 +198,16 @@ class Chat {
       this.calls = new CallManager({ api: supabaseCallApi(this.me.id), meId: this.me.id,
         onChange: (s) => this.overlay?.update(s), onEnded: (e) => this.onCallEnded(e) })
       this.overlay = new CallOverlay(this, this.calls)
+      this.gcalls = new GroupCallManager({ api: supabaseGroupApi(this.me.id), meId: this.me.id,
+        isBusy: () => this.calls.s.phase !== 'idle',
+        onChange: (s) => this.goverlay?.update(s), onEnded: (e) => this.onGroupCallEnded(e), onFeed: () => this.refreshCallBannerSoon() })
+      this.goverlay = new GroupCallOverlay(this, this.gcalls)
+      // someone phones me one-to-one while I am in a group call: tell them I cannot answer
+      const ringRow = this.calls.onCallRow.bind(this.calls)
+      this.calls.onCallRow = (c) => {
+        if (this.gcalls.busy() && c.status === 'ringing' && c.callee_id === this.me.id) { this.calls.api.decline(c.id).catch(() => {}); return }
+        ringRow(c)
+      }
     }
     newActivityCount(this.me.id).then((n) => { if (this.alive && n && this.tab !== 'updates') this.setStatusBadge(n) }, () => {})
     await this.loadRooms()
@@ -215,6 +228,10 @@ class Chat {
     this.calls?.hangup?.()
     this.calls?.destroy()
     this.overlay?.hide()
+    clearTimeout(this.bannerT)
+    this.gcalls?.hangup?.()
+    this.gcalls?.destroy()
+    this.goverlay?.hide()
   }
 
   subscribe() {
@@ -241,6 +258,41 @@ class Chat {
     if (!peerId) return
     if (!this.calls) return toast('Calls are not supported in this browser.', 'error')
     try { await this.calls.start(peerId, kind) } catch (e) { toast(friendlyError(e), 'error') }
+  }
+  // one tap in a direct chat calls the person, in a group chat it starts (or joins) a group call
+  async callRoom(kind) {
+    const r = this.room()
+    if (!r || r.notes_owner) return
+    if (r.is_direct) return this.callPeer(this.peerOf(r), kind)
+    if (!this.gcalls) return toast('Calls are not supported in this browser.', 'error')
+    try { await this.gcalls.start(r.id, kind) } catch (e) { toast(friendlyError(e), 'error') }
+  }
+  async startGroupCall(roomId, kind) {
+    if (!this.gcalls) return toast('Calls are not supported in this browser.', 'error')
+    try { await this.gcalls.start(roomId, kind) } catch (e) { toast(friendlyError(e), 'error') }
+  }
+  async joinGroupCall(callId) {
+    if (!this.gcalls) return
+    try { await this.gcalls.join(callId) } catch (e) { toast(friendlyError(e), 'error') }
+  }
+  onGroupCallEnded({ reason, message }) {
+    if (message) toast(message, reason === 'error' ? 'error' : 'info')
+    else if (reason === 'ended') toast('Call ended')
+    if (this.tab === 'calls' && this.alive) renderCalls(this.callsView, this)
+    this.refreshCallBannerSoon()
+  }
+  refreshCallBannerSoon() { clearTimeout(this.bannerT); this.bannerT = setTimeout(() => this.refreshCallBanner(), 400) }
+  // "Group voice call in progress - Join" strip, so people who missed the ring can still jump in
+  async refreshCallBanner() {
+    const r = this.room()
+    if (!this.alive || !this.gcalls || !r || r.is_direct || r.notes_owner) { if (this.callBanner) this.callBanner.hidden = true; return }
+    let call = null
+    try { call = await this.gcalls.api.activeForRoom(r.id) } catch { /* ignore */ }
+    if (!this.alive || this.currentId !== r.id) return
+    if (!call || this.gcalls.s.call?.id === call.id) { this.callBanner.hidden = true; return }
+    clear(this.callBanner).append(h('span', {}, `📞 Group ${call.kind} call in progress`),
+      h('button', { class: 'btn primary small', type: 'button', onclick: () => this.joinGroupCall(call.id) }, 'Join'))
+    this.callBanner.hidden = false
   }
   onCallEnded({ reason, message }) {
     if (message && reason !== 'ended') toast(message, reason === 'error' ? 'error' : 'info')
@@ -420,7 +472,8 @@ class Chat {
         ? (describeStatus(this.status.get(peer)) || 'Direct chat')
         : r.participants.map((p) => this.nameOf(p.profile_id)).join(', ')
     }
-    this.voiceCallBtn.hidden = this.videoCallBtn.hidden = !r.is_direct || !this.calls
+    this.voiceCallBtn.hidden = this.videoCallBtn.hidden = !!r.notes_owner || !this.calls
+    this.refreshCallBannerSoon()
     const fresh = this.roomAvatar(r, 'sm')
     this.paneAvatar.replaceWith(fresh); this.paneAvatar = fresh
     if (peer) { fresh.classList.add('clickable'); fresh.onclick = () => this.showProfile(peer) }

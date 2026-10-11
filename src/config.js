@@ -12,6 +12,10 @@ export const CONFIG = {
   supabaseUrl: 'https://btvrgoojmjkbajqmyqpg.supabase.co',
   supabaseKey: 'sb_publishable_4fwQskQOnCuu_lrbL1KUoQ_oGbzOKzY',
 
+  // TURN relay (Cloudflare Worker that hands out short-lived relay credentials). Lets calls work on strict
+  // networks. Leave empty ('') to turn the relay off; calls then try direct connections only.
+  turnUrl: 'https://lsdk-turn.mthethwalungelo43.workers.dev/',
+
   // --- shown in the legal pages ---
   operatorName: 'Lungelo Mthethwa' ,          // <<< SET THIS (person/entity responsible for the service)
   contactEmail: 'mthethwalungelo43@gmail.com' ,      // <<< SET THIS (a mailbox you actually read)

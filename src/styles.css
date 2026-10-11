@@ -403,3 +403,34 @@ html[data-contrast="high"] .bubble { border: 2px solid currentColor; }
 .room-li:hover .room-more, .room-more:focus-visible { opacity: 1; }
 .room-item { -webkit-touch-callout: none; user-select: none; }
 .btn.block { display: block; width: 100%; margin: .3rem 0; text-align: left; }
+
+/* ---------- group calls (v0.8) ---------- */
+.gc-overlay { justify-content: flex-start; align-items: stretch; }
+.gc-head { text-align: center; padding: calc(.9rem + env(safe-area-inset-top)) 1rem .2rem; z-index: 3; }
+.gc-title { margin: 0; font-size: 1.15rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gc-status { color: #ffffffcc; font-variant-numeric: tabular-nums; font-size: .9rem; }
+.gc-grid { flex: 1; min-height: 0; display: grid; gap: .55rem; padding: .6rem .8rem calc(6.8rem + env(safe-area-inset-bottom)); grid-template-columns: 1fr 1fr; grid-auto-rows: minmax(0, 1fr); z-index: 2; }
+.gc-grid[hidden] { display: none; }
+.gc-grid[data-n="1"], .gc-grid[data-n="2"] { grid-template-columns: 1fr; }
+@media (orientation: landscape) and (min-width: 560px) {
+  .gc-grid[data-n="2"] { grid-template-columns: 1fr 1fr; }
+  .gc-grid[data-n="5"], .gc-grid[data-n="6"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+.gc-tile { position: relative; border-radius: 16px; overflow: hidden; background: #ffffff14; min-height: 0; }
+.gc-tile.dim { opacity: .6; }
+.gc-avatar { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.gc-avatar .avatar.xl { width: clamp(52px, 20vmin, 104px); height: clamp(52px, 20vmin, 104px); font-size: clamp(1.4rem, 7vmin, 2.4rem); }
+.gc-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; display: none; }
+.gc-tile.has-video .gc-video { display: block; }
+.gc-tile.me .gc-video { transform: scaleX(-1); }
+.gc-label { position: absolute; left: .5rem; right: .5rem; bottom: .45rem; display: flex; justify-content: space-between; align-items: center; gap: .4rem; font-size: .85rem; z-index: 2; }
+.gc-name, .gc-badge:not(:empty) { background: #0009; padding: .1rem .55rem; border-radius: 99px; }
+.gc-name { max-width: 65%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gc-retry { position: absolute; top: .5rem; right: .5rem; z-index: 3; }
+.gc-overlay .call-center { margin: auto; }
+.gc-overlay .call-controls { left: 0; right: 0; justify-content: center; }
+@media (prefers-reduced-motion: no-preference) { .gc-overlay.incoming .call-avatar { animation: pulse 2s infinite; border-radius: 50%; } }
+
+/* "a call is running in this group" strip above the messages */
+.call-banner { display: flex; align-items: center; justify-content: space-between; gap: .6rem; padding: .45rem .9rem; background: var(--accent-soft); color: var(--text); border-bottom: 1px solid var(--border); font-size: .9rem; }
+.call-banner[hidden] { display: none; }
