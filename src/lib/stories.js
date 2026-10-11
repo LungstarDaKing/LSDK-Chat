@@ -1,7 +1,7 @@
 // Status updates ("stories"): text, photo, video or audio that disappear after 24 hours.
 // Who can see them is decided by the database (story_visible), not by this file.
 import { supabase } from './supabase.js'
-import { removeFiles, uploadStoryMedia } from './media.js'
+import { removeFiles, uploadStoryMedia, signedUrl } from './media.js'
 
 export const TEXT_BGS = [
   'linear-gradient(135deg,#4f46e5,#9333ea)', 'linear-gradient(135deg,#0ea5e9,#2563eb)',
@@ -71,4 +71,45 @@ export async function sweepMyStories(meId) {
     if (files.length) await removeFiles('stories', files)
     await supabase.from('stories').delete().in('id', data.map((s) => s.id))
   } catch { /* try again next time */ }
+}
+
+/* ---------- likes, comments, saving ---------- */
+export async function getMyLike(storyId, meId) {
+  const { data } = await supabase.from('story_likes').select('story_id').eq('story_id', storyId).eq('user_id', meId).maybeSingle()
+  return !!data
+}
+export async function setLike(storyId, on) {
+  const { error } = await supabase.rpc('like_story', { p_story: storyId, p_on: on })
+  if (error) throw error
+}
+export async function sendComment(storyId, text) {
+  const { error } = await supabase.rpc('comment_on_story', { p_story: storyId, p_content: text })
+  if (error) throw error
+}
+// Author only -> [{ kind: 'like'|'comment', id, user_id, username, content, created_at }]
+export async function getActivity(storyId) {
+  const { data, error } = await supabase.rpc('get_story_activity', { p_story: storyId })
+  if (error) throw error
+  return data || []
+}
+export const deleteComment = (id) => supabase.from('story_comments').delete().eq('id', id)
+export const reportComment = (id, reason) => supabase.rpc('report_story_comment', { p_comment: id, p_reason: reason })
+
+// Opens the browser's download for a story photo / video / audio file.
+export async function saveStoryMedia(s) {
+  const url = await signedUrl('stories', s.attachment_path, s.attachment_name)
+  if (!url) throw new Error('Could not open this file.')
+  const a = document.createElement('a'); a.href = url; a.rel = 'noopener noreferrer'; a.download = s.attachment_name
+  document.body.append(a); a.click(); a.remove()
+}
+
+// How many new likes / comments arrived on my statuses since I last opened the Status tab.
+const K_SEEN = 'lsdkchat.statusSeen'
+export const markStatusSeen = () => { try { localStorage.setItem(K_SEEN, new Date().toISOString()) } catch { /* ignore */ } }
+export async function newActivityCount(meId) {
+  let since = '1970-01-01'
+  try { since = localStorage.getItem(K_SEEN) || since } catch { /* ignore */ }
+  const q = (t) => supabase.from(t).select('story_id', { count: 'exact', head: true }).eq('author_id', meId).gt('created_at', since)
+  const [a, b] = await Promise.all([q('story_likes'), q('story_comments')])
+  return (a.count || 0) + (b.count || 0)
 }

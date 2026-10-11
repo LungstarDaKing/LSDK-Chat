@@ -10,6 +10,7 @@ const write = (on) => { try { localStorage.setItem(KEY, on ? 'on' : 'off') } cat
 let enabled = read()
 
 export const soundEnabled = () => enabled
+export const getAudioContext = () => { try { ctx = ctx || new (window.AudioContext || window.webkitAudioContext)() } catch { /* none */ } return ctx }
 export function setSoundEnabled(on) { enabled = !!on; write(enabled); if (enabled) ding() }
 
 // Browsers only allow sound after the person has clicked or pressed a key once on the page.
@@ -65,28 +66,19 @@ export function notifyIncoming({ inCurrentRoom }) {
   bumpTitle()
 }
 
-/* ---- ringtone for incoming calls (generated in the browser, no file needed) ---- */
-let ringTimer = null
-function ringOnce() {
-  if (!ctx) return
+/* ---- chime for a new like / comment on your status (own on/off switch in Settings) ---- */
+const KL = 'lsdkchat.likesound'
+export const likeSoundEnabled = () => { try { return localStorage.getItem(KL) !== 'off' } catch { return true } }
+export const setLikeSoundEnabled = (on) => { try { localStorage.setItem(KL, on ? 'on' : 'off') } catch { /* ignore */ } if (on) likeChime(true) }
+let lastLike = 0
+export function likeChime(force = false) {
+  if ((!force && (!enabled || !likeSoundEnabled())) || !ctx) return
+  const now = Date.now(); if (now - lastLike < 1500) return; lastLike = now
   try {
     ctx.resume?.()
-    const t = ctx.currentTime
-    const gain = ctx.createGain()
-    gain.gain.setValueAtTime(0.0001, t)
-    gain.gain.exponentialRampToValueAtTime(0.16, t + 0.03)
-    gain.gain.setValueAtTime(0.16, t + 0.5)
-    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.7)
-    gain.connect(ctx.destination)
-    for (const [f, s] of [[660, 0], [880, 0.25]]) {
-      const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.setValueAtTime(f, t + s)
-      o.connect(gain); o.start(t + s); o.stop(t + s + 0.25)
-    }
+    const t = ctx.currentTime, g = ctx.createGain()
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.14, t + 0.015); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.5)
+    g.connect(ctx.destination)
+    for (const [f, s] of [[1046.5, 0], [1568, 0.09]]) { const o = ctx.createOscillator(); o.type = 'triangle'; o.frequency.setValueAtTime(f, t + s); o.connect(g); o.start(t + s); o.stop(t + s + 0.3) }
   } catch { /* ignore */ }
 }
-export function startRingtone() {
-  stopRingtone()
-  if (!enabled) return
-  ringOnce(); ringTimer = setInterval(ringOnce, 2200)
-}
-export function stopRingtone() { if (ringTimer) clearInterval(ringTimer); ringTimer = null }

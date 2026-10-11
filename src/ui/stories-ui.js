@@ -1,6 +1,6 @@
 import { h, clear, toast, dialog, confirmDialog, friendlyError } from '../lib/dom.js'
-import { loadStories, postTextStory, postMediaStory, markViewed, reportStory, getViewers, deleteStory, TEXT_BGS } from '../lib/stories.js'
-import { STORY_ACCEPT, mediaDuration, signedUrl, fmtSize } from '../lib/media.js'
+import { loadStories, postTextStory, postMediaStory, markViewed, reportStory, getViewers, deleteStory, TEXT_BGS, getMyLike, setLike, sendComment, getActivity, deleteComment, reportComment, saveStoryMedia } from '../lib/stories.js'
+import { STORY_ACCEPT, signedUrl, fmtSize } from '../lib/media.js'
 
 const ago = (iso) => {
   const m = Math.max(1, Math.round((Date.now() - new Date(iso).getTime()) / 60000))
@@ -150,12 +150,36 @@ function openViewer(list, startGroup, ctx, onClose) {
     }
     if (s.content && s.kind !== 'text') foot.append(h('p', { class: 'story-caption' }, s.content))
     if (mine) {
+      const act = h('button', { class: 'btn small', type: 'button', onclick: () => activity(s) }, '♥ 💬 Activity')
       foot.append(h('div', { class: 'story-actions' },
-        h('button', { class: 'btn small', type: 'button', onclick: () => viewers(s) }, '👁 Viewers'),
+        h('button', { class: 'btn small', type: 'button', onclick: () => viewers(s) }, '👁 Viewers'), act,
         h('button', { class: 'btn small danger', type: 'button', onclick: () => remove(s) }, 'Delete')))
+      getActivity(s.id).then((rows) => { if (cur() === s) act.textContent = `♥ ${rows.filter((r) => r.kind === 'like').length} · 💬 ${rows.filter((r) => r.kind === 'comment').length}` }, () => {})
     } else {
       markViewed(s.id)
-      foot.append(h('div', { class: 'story-actions' }, h('button', { class: 'btn small', type: 'button', onclick: () => report(s) }, 'Report')))
+      const like = h('button', { class: 'btn icon round like-btn', type: 'button', 'aria-label': 'Like', 'aria-pressed': 'false', title: 'Like' }, '🤍')
+      let liked = false
+      const paintLike = () => { like.textContent = liked ? '❤️' : '🤍'; like.setAttribute('aria-pressed', String(liked)); like.classList.toggle('on', liked) }
+      getMyLike(s.id, ctx.me.id).then((v) => { if (cur() === s) { liked = v; paintLike() } })
+      like.onclick = async () => {
+        like.disabled = true
+        try { await setLike(s.id, !liked); liked = !liked; paintLike() } catch (e) { toast(friendlyError(e), 'error') }
+        like.disabled = false
+      }
+      const box = h('input', { class: 'story-comment', type: 'text', maxLength: 300, placeholder: 'Reply privately…', 'aria-label': 'Comment on this status', autocomplete: 'off' })
+      const send = async () => {
+        const v = box.value.trim(); if (!v) return
+        box.disabled = true
+        try { await sendComment(s.id, v); box.value = ''; toast('Sent. Only they can see your comment.', 'success') } catch (e) { toast(friendlyError(e), 'error') }
+        box.disabled = false; box.focus()
+      }
+      box.addEventListener('keydown', (e) => { if (e.key !== 'Escape') e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); send() } })
+      box.addEventListener('focus', hold); box.addEventListener('blur', () => { if (paused && ov.isConnected && !document.querySelector('dialog[open]')) unhold() })
+      foot.append(h('div', { class: 'story-reply' }, box,
+        h('button', { class: 'btn icon round', type: 'button', 'aria-label': 'Send comment', title: 'Send', onclick: send }, '➤'), like),
+        h('div', { class: 'story-actions' },
+          s.kind !== 'text' && h('button', { class: 'btn small', type: 'button', onclick: async () => { try { await saveStoryMedia(s); toast('Saved to your downloads', 'success') } catch (e) { toast(friendlyError(e), 'error') } } }, '⬇ Save'),
+          h('button', { class: 'btn small', type: 'button', onclick: () => report(s) }, 'Report')))
     }
   }
 
@@ -169,6 +193,35 @@ function openViewer(list, startGroup, ctx, onClose) {
     await ctx.ensurePeople(rows.map((r) => r.viewer_id))
     await new Promise((res) => dialog({ title: `Seen by ${rows.length}`, onClose: res, actions: [{ label: 'Close' }],
       body: rows.length ? h('ul', { class: 'members' }, rows.map((r) => h('li', {}, h('span', {}, r.username), h('small', {}, ago(r.viewed_at))))) : h('p', {}, 'Nobody has seen this yet.') }))
+  })
+  const activity = (s) => pauseFor(async () => {
+    let rows = []
+    try { rows = await getActivity(s.id) } catch (e) { return toast(friendlyError(e), 'error') }
+    const likes = rows.filter((r) => r.kind === 'like'), comments = rows.filter((r) => r.kind === 'comment')
+    const body = h('div', {})
+    const draw = () => {
+      clear(body)
+      body.append(h('h3', {}, `❤️ Likes (${likes.length})`), likes.length ? h('p', {}, likes.map((l) => l.username).join(', ')) : h('p', { class: 'small' }, 'No likes yet.'),
+        h('h3', {}, `💬 Comments (${comments.length})`), h('p', { class: 'small' }, 'Comments are private: only you and the person who wrote them can see them.'),
+        comments.length ? h('ul', { class: 'members' }, comments.map((c) => h('li', { class: 'comment-li' },
+          h('span', { class: 'grow' }, h('strong', {}, c.username), h('span', { class: 'block cm-text' }, c.content), h('small', {}, ago(c.created_at))),
+          h('span', { class: 'row tight' },
+            h('button', { class: 'linkish', type: 'button', onclick: async () => { const { error } = await deleteComment(c.id); if (error) return toast(friendlyError(error), 'error'); comments.splice(comments.indexOf(c), 1); draw() } }, 'Delete'),
+            h('button', { class: 'linkish', type: 'button', onclick: () => reportC(c) }, 'Report'))))) : h('p', { class: 'small' }, 'No comments yet.'))
+    }
+    const reportC = (c) => {
+      const reason = h('textarea', { rows: 3, maxLength: 500, 'aria-label': 'Reason', placeholder: 'What is wrong with this comment?' })
+      const err = h('div', { class: 'msg error', role: 'alert' })
+      dialog({ title: 'Report comment', body: [h('blockquote', {}, c.content.slice(0, 300)), reason, err],
+        actions: [{ label: 'Cancel' }, { label: 'Send report', kind: 'primary', onClick: async () => {
+          if (!reason.value.trim()) { err.textContent = 'Please describe the problem.'; return 'keep-open' }
+          const { error } = await reportComment(c.id, reason.value.trim())
+          if (error) { err.textContent = friendlyError(error); return 'keep-open' }
+          toast('Report sent. Thank you.', 'success')
+        } }] })
+    }
+    draw()
+    await new Promise((res) => dialog({ title: 'Activity on your status', body, onClose: res, actions: [{ label: 'Close' }] }))
   })
   const remove = (s) => pauseFor(async () => {
     if (!(await confirmDialog('Delete this status?', 'It will disappear for everyone.', 'Delete', true))) return

@@ -31,6 +31,8 @@ async function downloadMyData() {
   const { data: priv } = await supabase.from('user_private').select('show_online, show_last_seen, last_seen_at, share_stories, read_receipts').eq('id', user.id).maybeSingle()
   const { data: myStories } = await supabase.from('stories').select('id, kind, content, attachment_name, created_at, expires_at').eq('author_id', user.id)
   const { data: myCalls } = await supabase.from('calls').select('caller_id, callee_id, kind, status, created_at, answered_at, ended_at')
+  const { data: myComments } = await supabase.from('story_comments').select('story_id, content, created_at').eq('user_id', user.id)
+  const { data: myReactions } = await supabase.from('message_reactions').select('message_id, emoji, created_at').eq('user_id', user.id)
   const out = {
     exported_at: new Date().toISOString(),
     account: { id: user.id, email: user.email, created_at: user.created_at },
@@ -39,6 +41,8 @@ async function downloadMyData() {
     rooms: memberships,
     status_updates_you_posted: myStories,
     call_history: myCalls,
+    status_comments_you_wrote: myComments,
+    message_reactions_you_gave: myReactions,
     messages_you_sent: messages.map(({ attachment_path, ...m }) => m),
     note: 'Files you sent (photos, videos, audio, PDFs) and your profile picture are not inside this JSON file; save them from the chats before deleting your account if you want to keep them.',
   }

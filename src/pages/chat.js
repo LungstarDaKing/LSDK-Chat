@@ -10,7 +10,10 @@ import { startRecording, voiceSupported, fmtDuration } from '../lib/voice.js'
 import { CallManager, supabaseCallApi, callsSupported } from '../lib/calls.js'
 import { CallOverlay, renderCalls } from '../ui/calls-ui.js'
 import { renderUpdates } from '../ui/stories-ui.js'
-import { sweepMyStories } from '../lib/stories.js'
+import { sweepMyStories, markStatusSeen, newActivityCount } from '../lib/stories.js'
+import { likeChime, likeSoundEnabled } from '../lib/sound.js'
+import { reactToMessage, loadReactions, setReaction, summarize } from '../lib/reactions.js'
+import { attachHold, openReactSheet } from '../ui/react-sheet.js'
 
 const PAGE = 50
 const MAX_LEN = 1000
@@ -41,6 +44,7 @@ class Chat {
     this.reads = new Map()
     this.typers = new Map()
     this.players = new Map()
+    this.reactions = new Map()
     this.tab = 'chats'
     this.receipts = true
     this.currentId = null
@@ -64,7 +68,7 @@ class Chat {
     this.updatesView = h('div', { class: 'tab-view', role: 'tabpanel', hidden: true })
     this.callsView = h('div', { class: 'tab-view', role: 'tabpanel', hidden: true })
     this.banner = h('div', { class: 'banner', role: 'status', hidden: true }, 'Connection lost - reconnecting…')
-    this.badges = { chats: h('span', { class: 'tab-badge', hidden: true }), calls: h('span', { class: 'tab-badge', hidden: true }) }
+    this.badges = { chats: h('span', { class: 'tab-badge', hidden: true }), updates: h('span', { class: 'tab-badge', hidden: true }), calls: h('span', { class: 'tab-badge', hidden: true }) }
     this.tabBtns = {}
     const tab = (id, icon, label) => {
       this.tabBtns[id] = h('button', { class: 'tab', type: 'button', role: 'tab', 'aria-selected': 'false', onclick: () => this.setTab(id) },
@@ -154,7 +158,7 @@ class Chat {
     this.tab = id
     const views = { chats: this.chatsView, updates: this.updatesView, calls: this.callsView }
     for (const [k, v] of Object.entries(views)) { v.hidden = k !== id; this.tabBtns[k]?.setAttribute('aria-selected', String(k === id)); this.tabBtns[k]?.classList.toggle('active', k === id) }
-    if (id === 'updates') renderUpdates(this.updatesView, this)
+    if (id === 'updates') { markStatusSeen(); this.badges.updates.hidden = true; this.statusNew = 0; renderUpdates(this.updatesView, this) }
     if (id === 'calls') { try { localStorage.setItem('lsdkchat.callsSeen', new Date().toISOString()) } catch { /* ignore */ } this.badges.calls.hidden = true; renderCalls(this.callsView, this) }
   }
 
@@ -174,6 +178,7 @@ class Chat {
         onChange: (s) => this.overlay?.update(s), onEnded: (e) => this.onCallEnded(e) })
       this.overlay = new CallOverlay(this, this.calls)
     }
+    newActivityCount(this.me.id).then((n) => { if (this.alive && n && this.tab !== 'updates') this.setStatusBadge(n) }, () => {})
     await this.loadRooms()
     this.subscribe()
     this.poll = setInterval(() => { if (document.visibilityState === 'visible') this.loadRooms() }, 30000)
@@ -198,6 +203,9 @@ class Chat {
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (p) => this.onInsert(p.new))
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, (p) => this.onUpdate(p.new))
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, (p) => this.onDelete(p.old?.id))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'message_reactions' }, (p) => this.onReaction(p))
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'story_likes' }, (p) => this.onStoryActivity('like', p.new))
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'story_comments' }, (p) => this.onStoryActivity('comment', p.new))
       .subscribe((status) => {
         if (!this.alive) return
         if (status === 'SUBSCRIBED') {
@@ -417,6 +425,7 @@ class Chat {
     this.messages = []
     this.reads = new Map()
     this.players.clear()
+    this.reactions = new Map()
     this.hasMore = false
     this.events.join(roomId)
     this.renderRooms(); this.renderHeader(); this.setPaneVisible(true)
@@ -425,6 +434,7 @@ class Chat {
     await this.loadMessages(true)
     this.markRead()
     this.loadReads()
+    this.holdTip()
     this.input.focus({ preventScroll: true })
   }
 
@@ -436,8 +446,10 @@ class Chat {
     if (error) return toast(friendlyError(error), 'error')
     this.messages = data.reverse()
     this.hasMore = data.length === PAGE
+    const rx = await loadReactions(id)
     await this.ensurePeople(this.messages.map((m) => m.sender_id))
     if (token !== this.loadToken) return
+    this.reactions = rx
     this.renderMessages(scrollDown)
   }
 
@@ -562,15 +574,86 @@ class Chat {
       body = [m.attachment_path && this.attachmentEl(m), m.content && h('div', { class: 'text' }, m.content)]   // text only: safe against HTML injection
     }
     const actions = editing ? null : h('div', { class: 'msg-actions' },
+      h('button', { class: 'linkish', type: 'button', 'aria-label': 'React to this message', onclick: (e) => this.openMenu(m, e.currentTarget.closest('.bubble'), own, iAmAdmin) }, '☺ React'),
       own && h('button', { class: 'linkish', type: 'button', onclick: () => { this.editingId = m.id; this.renderMessages(false) } }, m.attachment_path ? 'Edit caption' : 'Edit'),
       (own || iAmAdmin) && h('button', { class: 'linkish', type: 'button', onclick: () => this.deleteMessage(m) }, 'Delete'),
       !own && h('button', { class: 'linkish', type: 'button', onclick: () => this.reportMessage(m) }, 'Report'))
-    return h('div', { class: `msg-row ${own ? 'own' : 'other'}${grouped ? ' grouped' : ''}`, dataset: { id: m.id } },
-      h('div', { class: 'bubble' },
+    const bubble = h('div', { class: 'bubble' },
         !grouped && h('div', { class: 'meta' }, own ? 'You' : h('button', { class: 'linkish plain', type: 'button', onclick: () => this.showProfile(m.sender_id) }, this.nameOf(m.sender_id))),
         body,
+        this.reactionsEl(m),
         h('div', { class: 'foot' }, fmtTime(m.created_at), m.edited_at && ' · edited', own && this.ticks(m)),
-        actions))
+        actions)
+    if (!editing) attachHold(bubble, (el) => this.openMenu(m, el, own, iAmAdmin))
+    return h('div', { class: `msg-row ${own ? 'own' : 'other'}${grouped ? ' grouped' : ''}`, dataset: { id: m.id } }, bubble)
+  }
+
+  /* ---------- reactions ---------- */
+  holdTip() {
+    try { if (localStorage.getItem('lsdkchat.tip') || !this.messages.length) return; localStorage.setItem('lsdkchat.tip', '1') } catch { return }
+    toast('Tip: press and hold a message (or right-click it) to react with an emoji.')
+  }
+
+  reactionsEl(m) {
+    const sum = summarize(this.reactions.get(m.id))
+    if (!sum.length) return null
+    return h('div', { class: 'reactions', role: 'group', 'aria-label': 'Reactions' }, sum.map((r) => {
+      const mine = r.users.includes(this.me.id)
+      return h('button', { type: 'button', class: `reaction${mine ? ' mine' : ''}`, title: r.users.map((u) => (u === this.me.id ? 'You' : this.nameOf(u))).join(', '),
+        'aria-label': `${r.emoji} ${r.count}${mine ? ', including you' : ''}. Press to ${mine ? 'remove' : 'add'}`, 'aria-pressed': String(mine),
+        onclick: () => this.react(m, r.emoji) }, r.emoji, r.count > 1 && h('span', { class: 'rc' }, r.count))
+    }))
+  }
+
+  openMenu(m, bubble, own, iAmAdmin) {
+    const mineNow = this.reactions.get(m.id)?.get(this.me.id)
+    openReactSheet({
+      anchor: bubble, current: mineNow, onPick: (e) => this.react(m, e),
+      actions: [
+        m.content && { icon: '⧉', label: 'Copy text', onClick: () => navigator.clipboard?.writeText(m.content).then(() => toast('Copied', 'success'), () => toast('Could not copy.', 'error')) },
+        m.attachment_path && { icon: '⬇', label: 'Save file', onClick: () => this.saveAttachment(m) },
+        own && { icon: '✎', label: m.attachment_path ? 'Edit caption' : 'Edit', onClick: () => { this.editingId = m.id; this.renderMessages(false) } },
+        !own && { icon: '⚑', label: 'Report', onClick: () => this.reportMessage(m) },
+        (own || iAmAdmin) && { icon: '🗑', label: 'Delete', danger: true, onClick: () => this.deleteMessage(m) },
+      ],
+    })
+  }
+
+  async react(m, emoji) {
+    const before = this.reactions.get(m.id)?.get(this.me.id)
+    setReaction(this.reactions, m.id, this.me.id, before === emoji ? null : emoji)       // instant feedback
+    this.renderMessages(false)
+    try { await reactToMessage(m.id, emoji) } catch (e) {
+      setReaction(this.reactions, m.id, this.me.id, before || null); this.renderMessages(false)
+      toast(friendlyError(e), 'error')
+    }
+  }
+
+  onReaction(p) {
+    const row = p.eventType === 'DELETE' ? p.old : p.new
+    if (!row?.message_id || !this.messages.some((x) => x.id === row.message_id)) return
+    setReaction(this.reactions, row.message_id, row.user_id, p.eventType === 'DELETE' ? null : row.emoji)
+    this.renderMessages(false)
+  }
+
+  async saveAttachment(m) {
+    const url = await signedUrl('media', m.attachment_path, m.attachment_name)
+    if (!url) return toast('Could not open this file.', 'error')
+    const a = h('a', { href: url, rel: 'noopener noreferrer', download: m.attachment_name })
+    document.body.append(a); a.click(); a.remove()
+    toast('Saved to your downloads', 'success')
+  }
+
+  /* ---------- status likes / comments (notifications for the author) ---------- */
+  setStatusBadge(n) { this.statusNew = n; this.badges.updates.textContent = n > 9 ? '9+' : String(n); this.badges.updates.hidden = !n }
+  async onStoryActivity(kind, row) {
+    if (!row || row.author_id !== this.me.id || row.user_id === this.me.id) return
+    await this.ensurePeople([row.user_id])
+    const who = this.nameOf(row.user_id)
+    toast(kind === 'like' ? `❤️ ${who} liked your status` : `💬 ${who}: ${String(row.content).slice(0, 60)}`)
+    if (likeSoundEnabled()) likeChime()
+    if (this.tab === 'updates') renderUpdates(this.updatesView, this)
+    else this.setStatusBadge((this.statusNew || 0) + 1)
   }
 
   /* ---------- realtime handlers ---------- */

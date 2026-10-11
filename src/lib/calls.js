@@ -53,10 +53,6 @@ export class CallManager {
     this.PC = rtc.RTCPeerConnection || window.RTCPeerConnection
     this.getMedia = rtc.getUserMedia || ((c) => navigator.mediaDevices.getUserMedia(c))
     this.ice = rtc.iceServers || iceServers()
-    fetch("https://lsdk-turn.mthethwalungelo43.workers.dev/")
-      .then(r => r.json())
-      .then(d => { if (d.iceServers) this.ice = d.iceServers })
-      .catch(() => {})
     this.s = this.blank()
     this.buffer = []
     this.unlisten = api.listen((c) => this.onCallRow(c), (sig) => this.onSignal(sig))

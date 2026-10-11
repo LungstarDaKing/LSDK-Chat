@@ -40,6 +40,9 @@ const TERMS = () => [
     'Status updates (text, photo, video or audio) are visible for 24 hours to people who share a chat with you, unless you switch sharing off in Settings. Viewers can see who viewed them and can report them. Expired updates may stay stored until you next open the app.',
     'Free voice and video calls are available only between two people who have each sent the other at least one message in their direct chat. Calls go directly between your devices; we do not record them. Do not record or share a call without the other person\'s consent where the law requires it.',
     'All rules in section 6 apply equally to voice notes, status updates and calls (for example, no harassment, no unwanted or sexual calls).'] },
+  { h: '6b. Reactions, likes and comments', ul: [
+    'Emoji reactions on messages are visible to everyone in that chat. Likes on a status are visible to the person who posted it. Comments on a status are private replies: only the person who posted the status and the person who wrote the comment can see them. The author can delete or report comments.',
+    'The rules in section 6 apply to comments too. A person who views your status can save its photo, video or audio to their device, and nobody can stop screenshots; only post what you are happy to have saved.'] },
   { h: '7. Reporting and moderation', p: [
     'Every message from another person has a Report option. Reports (including a copy of the reported message and a reference to any attached file) are sent to us and reviewed manually by the operator, who is a person, not a 24/7 moderation team. We may remove content (including files and profile pictures), restrict features, or suspend or delete accounts that break these Terms or put others or the Service at risk. We are not obliged to monitor content and do not promise to act on every report or within a set time.'] },
   { h: '8. Do not share sensitive information', p: [
@@ -66,6 +69,8 @@ const PRIVACY = () => [
     'Content you create: messages (text, send time, edit time), files you send (photos, videos, audio, PDFs, text files, with their file name, type and size), room names, which rooms you belong to and your role (admin/member) in them, and any abuse reports you file (including a copy of the reported message).',
     'Voice notes are stored like other files (private storage, only chat members). Status updates and their files are stored for 24 hours of visibility, plus a list of who viewed each one (visible to you as the author).',
     'Read receipts: the time you last read each chat is stored so unread counts and "Seen" work. If you switch receipts off in Settings, others cannot see it, and you cannot see theirs. Typing bubbles are sent live and never stored.',
+    'Reactions, likes and comments: a reaction stores which emoji you picked on which message; a like or comment on a status stores who made it, when, and (for comments) the text. They are deleted with the message, the status or your account.',
+    'Ringtones: your ringtone choices and any audio files you add as ringtones are kept only in your browser on your device and are never uploaded.',
     'Calls: we store who called whom, the type (voice/video), the outcome and the times for 90 days so the Calls list works. During set-up, connection information (which includes network addresses) is exchanged through our database and deleted when the call ends. Because calls are peer-to-peer, the other person\'s device can learn your public IP address during a call, and the free public STUN servers used (by default Google\'s) see connection requests. Audio and video are not stored.',
     'Activity data: a "last active" timestamp, refreshed about once a minute while the app is open in a visible browser tab, and your online / last-seen settings.',
     'Technical data: your IP address, browser/device information and timestamps are processed in the server logs of our providers (Supabase and GitHub) when you use the Service or sign in. We do not build profiles from them, but we may look at them to investigate abuse or security problems.',
@@ -116,7 +121,7 @@ const DISCLOSURES = () => [
     'You can call someone only after you have both messaged each other. Calls are free and go directly between the two devices.',
     'The person you call can learn your public IP address. On some networks (strict firewalls, some mobile or campus networks) calls may not connect, because this beta has no relay server.',
     'Calls ring only while the app is open in a browser tab. There is no push notification, so you can miss a call.'] },
-  { h: 'Status updates', p: ['Anyone you share a chat with can see your status updates for 24 hours unless you turn sharing off. They can screenshot or save them. Reported updates are kept until the operator reviews them.'] },
+  { h: 'Status updates', p: ['Anyone you share a chat with can see your status updates for 24 hours unless you turn sharing off. They can like and comment (comments are private to you and the commenter), and they can save or screenshot them. Reported updates are kept until the operator reviews them.'] },
   { h: 'Moderation is manual and limited', p: ['Reports are read by the operator when they have time. There is no automatic filtering and no guaranteed response time.'] },
   { h: 'Your data', ul: [
     'Stored with Supabase in the region stated in the Privacy Policy; the site files are served by GitHub Pages.',

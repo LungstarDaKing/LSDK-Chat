@@ -3,7 +3,7 @@
 // page renders, validation works, and user-supplied text can never become HTML.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const ME = { id: 'u1', username: 'alice', bio: 'hello', avatar_path: null, terms_version: '2026-10-11', terms_accepted_at: new Date().toISOString(), created_at: new Date().toISOString() }
+const ME = { id: 'u1', username: 'alice', bio: 'hello', avatar_path: null, terms_version: '2026-10-12', terms_accepted_at: new Date().toISOString(), created_at: new Date().toISOString() }
 const fixtures = {
   profiles: [ME],
   rooms: [{ id: 'r1', name: 'Team', is_direct: false, last_message_at: new Date().toISOString(),
@@ -73,7 +73,7 @@ describe('auth page', () => {
     root.querySelector('form').dispatchEvent(new Event('submit', { cancelable: true }))
     await flush()
     const arg = fakeSupabase.auth.signUp.mock.calls[0][0]
-    expect(arg.options.data).toEqual({ username: 'alice_1', terms_version: '2026-10-11' })
+    expect(arg.options.data).toEqual({ username: 'alice_1', terms_version: '2026-10-12' })
     expect(root.textContent).toMatch(/Check your email/)
   })
   it('login shows a generic message for bad credentials', async () => {
@@ -179,5 +179,20 @@ describe('v0.4 pages', () => {
     expect(root.querySelectorAll('.bg-sw').length).toBeGreaterThanOrEqual(10)
     root.querySelectorAll('.bg-sw')[4].click()
     expect(document.documentElement.style.getPropertyValue('--chat-bg')).toContain('gradient')
+  })
+})
+
+describe('v0.5 reactions', () => {
+  it('every emoji in the picker is allowed by the database list', async () => {
+    const fs = await import('node:fs')
+    const sql = fs.readFileSync('supabase/update-v0.5.sql', 'utf8')
+    const allowed = new Set([...sql.slice(sql.indexOf('array['), sql.indexOf(']);')).matchAll(/'([^']+)'/g)].map((m) => m[1]))
+    const { QUICK, CATEGORIES } = await import('../src/lib/emoji.js')
+    for (const e of [...QUICK, ...CATEGORIES.flatMap((c) => c.list)]) expect(allowed.has(e), e).toBe(true)
+    const { summarize, setReaction } = await import('../src/lib/reactions.js')
+    const m = new Map(); setReaction(m, 'a', 'u1', '👍'); setReaction(m, 'a', 'u2', '👍'); setReaction(m, 'a', 'u3', '❤️')
+    expect(summarize(m.get('a'))[0]).toEqual({ emoji: '👍', count: 2, users: ['u1', 'u2'] })
+    setReaction(m, 'a', 'u1', null); setReaction(m, 'a', 'u2', null); setReaction(m, 'a', 'u3', null)
+    expect(m.has('a')).toBe(false)
   })
 })

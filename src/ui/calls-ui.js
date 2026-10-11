@@ -1,6 +1,6 @@
 import { h, clear, toast, friendlyError } from '../lib/dom.js'
 import { loadCallLog, clearCallLog } from '../lib/calls.js'
-import { startRingtone, stopRingtone } from '../lib/sound.js'
+import { startRingtone, stopRingtone } from '../lib/ringtones.js'
 import { fmtDuration } from '../lib/voice.js'
 
 // Full-screen call window driven by CallManager state.
@@ -10,7 +10,7 @@ export class CallOverlay {
   }
   update(s) {
     if (s.phase === 'idle') { this.hide(); return }
-    if (s.phase === 'incoming' && this.phase !== 'incoming') startRingtone()
+    if (s.phase === 'incoming' && this.phase !== 'incoming') startRingtone(s.peerId)
     if (s.phase !== 'incoming') stopRingtone()
     if (!this.el) this.build()
     const first = this.phase !== s.phase
