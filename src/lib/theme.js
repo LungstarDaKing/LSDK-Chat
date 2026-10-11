@@ -56,10 +56,45 @@ export async function setCustomImage(file) {
   apply()
 }
 
-export function backgroundCss(id = getBackgroundId(), dim = getDim()) {
-  if (id === 'custom' && getCustomImage()) {
+// ---- per-person chat background (this device only) ----
+const K_PER = 'lsdkchat.bg.per'
+const K_PIMG = 'lsdkchat.bgimage.'
+let chatPeer = null
+const perMap = () => { try { const o = JSON.parse(get(K_PER, '{}')); return o && typeof o === 'object' ? o : {} } catch { return {} } }
+export const getPersonBg = (uid) => { const v = perMap()[uid]; return typeof v === 'string' ? v : null }   // null = use general
+export function setPersonBg(uid, id) { const m = perMap(); if (id) m[uid] = id; else delete m[uid]; set(K_PER, JSON.stringify(m)); apply() }
+export const getPersonImage = (uid) => get(K_PIMG + uid, null)
+export function removePersonImage(uid) { set(K_PIMG + uid, null); if (getPersonBg(uid) === 'custom') setPersonBg(uid, null); else apply() }
+export function setChatPeer(uid) { if (uid === chatPeer) return; chatPeer = uid || null; apply() }
+
+async function toDataUrl(file, max, q) {
+  if (!file || !/^image\/(jpeg|png|webp)$/.test(file.type)) throw new Error('Choose a JPG, PNG or WebP picture.')
+  if (file.size > 20 * 1024 * 1024) throw new Error('That picture is too large (max 20 MB).')
+  let bmp
+  try { bmp = await createImageBitmap(file) } catch { throw new Error('That picture could not be read.') }
+  const scale = Math.min(1, max / Math.max(bmp.width, bmp.height))
+  const c = document.createElement('canvas')
+  c.width = Math.round(bmp.width * scale); c.height = Math.round(bmp.height * scale)
+  c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height)
+  bmp.close?.()
+  const blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', q))
+  if (!blob) throw new Error('That picture could not be processed.')
+  return new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = rej; fr.readAsDataURL(blob) })
+}
+export async function setPersonImage(uid, file) {
+  const url = await toDataUrl(file, 1100, 0.7)
+  if (!set(K_PIMG + uid, url)) throw new Error('Your browser has no room to store that picture. Try a smaller one.')
+  setPersonBg(uid, 'custom')
+}
+
+// which background applies right now: this person's own choice, else the general one
+const effectiveId = () => { const v = chatPeer && getPersonBg(chatPeer); return v && (v !== 'custom' || getPersonImage(chatPeer)) ? v : getBackgroundId() }
+const effectiveImage = () => (effectiveId() === getPersonBg(chatPeer) && getPersonBg(chatPeer) === 'custom' ? getPersonImage(chatPeer) : getCustomImage())
+
+export function backgroundCss(id = getBackgroundId(), dim = getDim(), img = getCustomImage()) {
+  if (id === 'custom' && img) {
     const d = (dim / 100).toFixed(2)
-    return `linear-gradient(rgba(0,0,0,${d}),rgba(0,0,0,${d})), url("${getCustomImage()}") center / cover no-repeat`
+    return `linear-gradient(rgba(0,0,0,${d}),rgba(0,0,0,${d})), url("${img}") center / cover no-repeat`
   }
   const bg = BACKGROUNDS.find((b) => b.id === id) || BACKGROUNDS[0]
   return bg.css
@@ -69,8 +104,8 @@ export function apply() {
   const root = document.documentElement
   const t = getTheme()
   if (t === 'system') root.removeAttribute('data-theme'); else root.setAttribute('data-theme', t)
-  root.style.setProperty('--chat-bg', backgroundCss())
-  const id = getBackgroundId()
+  const id = effectiveId()
+  root.style.setProperty('--chat-bg', backgroundCss(id, getDim(), effectiveImage()))
   const dark = id === 'custom' ? true : !!BACKGROUNDS.find((b) => b.id === id)?.dark
   root.dataset.chatbg = id === 'classic' || id === 'dots' || id === 'waves' ? 'plain' : dark ? 'dark' : 'light'
   const meta = document.querySelector('meta[name=theme-color]')

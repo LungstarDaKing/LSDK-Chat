@@ -2,7 +2,7 @@ import { supabase } from '../lib/supabase.js'
 import { h, clear, toast, friendlyError } from '../lib/dom.js'
 import { BACKGROUNDS, THEMES, getTheme, setTheme, getBackgroundId, setBackground, getCustomImage, setCustomImage, removeCustomImage, getDim, setDim, backgroundCss } from '../lib/theme.js'
 import { soundEnabled, setSoundEnabled, likeSoundEnabled, setLikeSoundEnabled } from '../lib/sound.js'
-import { STOCK, MAX_CUSTOM, getPrefs, setDefaultTone, setPersonTone, listCustom, addCustomTone, removeCustomTone, previewTone, stopRingtone, toneName } from '../lib/ringtones.js'
+import { STOCK, MAX_CUSTOM, getPrefs, setDefaultTone, listCustom, addCustomTone, removeCustomTone, previewTone, stopRingtone } from '../lib/ringtones.js'
 import { typingEnabled, setTypingEnabled } from '../lib/room-events.js'
 import { clearCallLog } from '../lib/calls.js'
 import { state } from '../lib/state.js'
@@ -42,10 +42,10 @@ export async function renderSettings(root) {
   const likeSound = toggle('s-likesound', 'Status like and comment beep', 'A short chime when someone likes or comments on your status. Saved on this device only.', likeSoundEnabled(), (cb) => { setLikeSoundEnabled(cb.checked); flash('Saved') })
 
   /* ----- ringtones (this device only) ----- */
-  const toneBox = h('div', { class: 'tones' }), peopleBox = h('div', { class: 'field' })
+  const toneBox = h('div', { class: 'tones' })
   const toneFile = h('input', { type: 'file', accept: 'audio/*', hidden: true, 'aria-label': 'Choose an audio file for a ringtone',
     onchange: async () => { const f = toneFile.files[0]; toneFile.value = ''; if (!f) return
-      try { await addCustomTone(f); flash('Ringtone added'); drawTones(); drawPeople() } catch (e) { flash(e.message, 'error') } } })
+      try { await addCustomTone(f); flash('Ringtone added'); drawTones() } catch (e) { flash(e.message, 'error') } } })
   const addBtn = h('button', { class: 'btn', type: 'button', onclick: () => toneFile.click() })
   const allTones = () => [...STOCK.map((t) => ({ id: t.id, name: t.name, custom: false })), ...listCustom().map((t) => ({ ...t, custom: true }))]
   const drawTones = () => {
@@ -55,22 +55,9 @@ export async function renderSettings(root) {
     for (const t of allTones()) toneBox.append(h('div', { class: `tone${t.id === cur ? ' on' : ''}` },
       h('label', { class: 'tone-pick' }, h('input', { type: 'radio', name: 'tone', checked: t.id === cur, onchange: () => { setDefaultTone(t.id); drawTones(); flash('Default ringtone set') } }), h('span', {}, t.name, t.custom && h('em', { class: 'badge' }, 'mine'))),
       h('button', { class: 'btn small', type: 'button', 'aria-label': `Preview ${t.name}`, onclick: () => previewTone(t.id) }, '▶ Play'),
-      t.custom && h('button', { class: 'linkish', type: 'button', onclick: async () => { await removeCustomTone(t.id); drawTones(); drawPeople() } }, 'Remove')))
+      t.custom && h('button', { class: 'linkish', type: 'button', onclick: async () => { await removeCustomTone(t.id); drawTones() } }, 'Remove')))
   }
-  const drawPeople = async () => {
-    const { data } = await supabase.from('rooms').select('participants(profile_id, profiles(username))').eq('is_direct', true)
-    const seenIds = new Set(), rows = []
-    for (const r of data || []) for (const p of r.participants || []) if (p.profile_id !== uid && !seenIds.has(p.profile_id)) { seenIds.add(p.profile_id); rows.push({ id: p.profile_id, name: p.profiles?.username || 'Unknown' }) }
-    clear(peopleBox)
-    if (!rows.length) return peopleBox.append(h('p', { class: 'small' }, 'Start a direct chat with someone to give them their own ringtone.'))
-    const per = getPrefs().per
-    for (const r of rows.sort((a, b) => a.name.localeCompare(b.name))) {
-      const sel = h('select', { 'aria-label': `Ringtone for ${r.name}` }, h('option', { value: '' }, `Default (${toneName(getPrefs().def)})`), allTones().map((t) => h('option', { value: t.id, selected: per[r.id] === t.id }, t.name)))
-      sel.addEventListener('change', () => { setPersonTone(r.id, sel.value || null); if (sel.value) previewTone(sel.value); flash('Saved') })
-      peopleBox.append(h('div', { class: 'person-tone' }, h('span', {}, r.name), sel))
-    }
-  }
-  drawTones(); drawPeople()
+  drawTones()
 
   /* ----- appearance (this device only) ----- */
   const themeRow = h('div', { class: 'seg', role: 'radiogroup', 'aria-label': 'Theme' })
@@ -128,7 +115,7 @@ export async function renderSettings(root) {
       toneBox,
       h('div', { class: 'row' }, addBtn, toneFile,
         h('button', { class: 'btn', type: 'button', onclick: () => stopRingtone() }, '■ Stop sound')),
-      h('h3', {}, 'Ringtone for specific people'), peopleBox),
+      h('p', { class: 'small' }, 'To give one person their own ringtone or chat background, open their chat and tap their picture or name to see their profile.')),
     h('section', {}, h('h2', {}, 'Calls'),
       h('p', { class: 'small' }, 'Call history is kept for 90 days. Clearing it hides it from you; the other person keeps their own copy until they clear it.'),
       h('button', { class: 'btn', type: 'button', onclick: async () => { const { error } = await clearCallLog(); error ? toast(friendlyError(error), 'error') : toast('Call history cleared', 'success') } }, 'Clear my call history')),

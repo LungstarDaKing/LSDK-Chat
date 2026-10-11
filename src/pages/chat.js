@@ -14,6 +14,8 @@ import { sweepMyStories, markStatusSeen, newActivityCount } from '../lib/stories
 import { likeChime, likeSoundEnabled } from '../lib/sound.js'
 import { reactToMessage, loadReactions, setReaction, summarize } from '../lib/reactions.js'
 import { attachHold, openReactSheet } from '../ui/react-sheet.js'
+import { personalSection } from '../ui/person-prefs.js'
+import { setChatPeer } from '../lib/theme.js'
 
 const PAGE = 50
 const MAX_LEN = 1000
@@ -388,6 +390,7 @@ class Chat {
     if (!r) return
     this.paneTitle.textContent = this.title(r)
     const peer = this.peerOf(r)
+    setChatPeer(peer)
     if (!this.typers.size) {
       this.paneSub.textContent = r.is_direct
         ? (describeStatus(this.status.get(peer)) || 'Direct chat')
@@ -412,7 +415,7 @@ class Chat {
   async open(roomId) {
     if (!roomId) {
       this.events.leave(); this.clearTypers()
-      this.currentId = null; this.messages = []; this.setPaneVisible(false); this.renderRooms(); return
+      this.currentId = null; setChatPeer(null); this.messages = []; this.setPaneVisible(false); this.renderRooms(); return
     }
     if (this.tab !== 'chats') this.setTab('chats')
     if (roomId === this.currentId) { this.setPaneVisible(true); return }
@@ -919,6 +922,7 @@ class Chat {
       h('div', { class: 'profile-card' }, big,
         h('h3', {}, p.username), st && h('p', { class: 'small' }, st),
         h('p', { class: 'bio' }, p.bio || 'No bio yet.')),
+      id !== this.me.id && personalSection(id, p.username),
     ]
     const actions = [{ label: 'Close' }]
     let d
