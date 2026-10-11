@@ -355,3 +355,15 @@ input[type=range] { padding: 0; accent-color: var(--accent); }
 .tone-pick { flex: 1; display: flex; align-items: center; gap: .6rem; cursor: pointer; } .tone-pick input { width: auto; accent-color: var(--accent); }
 .person-tone { display: flex; justify-content: space-between; align-items: center; gap: .8rem; padding: .35rem 0; border-bottom: 1px solid var(--border); }
 .person-tone select { width: auto; min-width: 160px; }
+
+/* ---- v0.6: replies ---- */
+.quote { display: flex; flex-direction: column; text-align: left; width: 100%; font: inherit; cursor: pointer; border: 0; border-left: 4px solid var(--accent-2); background: #00000014; color: inherit; border-radius: 8px; padding: .3rem .6rem; margin: 0 0 .35rem; }
+.own .quote { border-left-color: #ffffffcc; background: #ffffff22; }
+.quote strong { font-size: .75rem; opacity: .9; } .quote span { font-size: .85rem; opacity: .85; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 36ch; }
+.quote.gone { cursor: default; font-size: .8rem; font-style: italic; opacity: .7; display: block; }
+.msg-row.flash .bubble { animation: flash 1.6s ease-out; }
+@keyframes flash { 0%, 40% { box-shadow: 0 0 0 4px var(--accent); } 100% { box-shadow: var(--shadow-sm); } }
+.reply-bar { display: flex; align-items: center; gap: .5rem; margin: 0 0 .4rem; padding: .35rem .5rem .35rem .8rem; border-left: 4px solid var(--accent); background: var(--surface-2); border-radius: 10px; }
+.reply-bar[hidden] { display: none; }
+.reply-quote { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.reply-quote strong { font-size: .78rem; color: var(--accent); } .reply-quote span { font-size: .88rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

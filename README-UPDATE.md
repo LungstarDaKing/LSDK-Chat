@@ -1,46 +1,42 @@
-# LSDKChat update v0.5
+# LSDKChat update v0.6
 
-New: emoji reactions on messages (press and hold), status likes + private comments + save,
-like/comment notification beep (can be switched off), ringtones (6 built-in + your own audio files,
-default or per person).
+New: **reply to a specific message** (text, photo, voice note...) with a quoted preview; tap the quote to jump to the original.
+Fixed: **voice notes** now play straight after recording (and old ones load more reliably).
 
-This pack is CUMULATIVE (it also contains v0.3 and v0.4), so it works whatever you have applied before.
-It does NOT contain src/config.js, so your settings stay untouched.
+CUMULATIVE pack (contains v0.3 - v0.5 too). It does NOT contain src/config.js, so your settings stay untouched.
 
 ## Step 1 - update the database (Supabase)
 1. https://supabase.com/dashboard -> your project -> **SQL Editor** -> **New query**.
-2. Run the three files in this order, one query each (open in Notepad, Ctrl+A, Ctrl+C, paste, **Run**):
-   a. supabase/update-v0.3.sql   (skip if you ran it before - running again is harmless)
-   b. supabase/update-v0.4.sql   (same)
-   c. supabase/update-v0.5.sql   <- the new one
+2. Run these files in order, one query each (open in Notepad, Ctrl+A, Ctrl+C, paste, **Run**). Skip any you already ran (re-running is harmless):
+   a. supabase/update-v0.3.sql
+   b. supabase/update-v0.4.sql
+   c. supabase/update-v0.5.sql
+   d. supabase/update-v0.6.sql   <- the new one (adds replies)
    Each should say "Success". A red error = stop and send me the text.
 
 ## Step 2 - copy the files
-Unzip, open `LSDKChat-update-v0.5`, select everything (Ctrl+A), copy, paste into
-`C:\Users\mthet\Downloads\LSDKChat`, choose "Replace the files in the destination" and merge folders.
-Do not touch `src\config.js`.
+Unzip, open `LSDKChat-update-v0.6`, Ctrl+A, copy, paste into `C:\Users\mthet\Downloads\LSDKChat`,
+choose "Replace the files in the destination", merge folders. Do not touch `src\config.js`.
 
 ## Step 3 - publish
 PowerShell:
     cd C:\Users\mthet\Downloads\LSDKChat
     git add .
-    git commit -m "v0.5 reactions, status likes/comments, ringtones"
+    git commit -m "v0.6 replies, voice note fix"
     git push
-Wait for the green tick in GitHub -> Actions, then open the site and press Ctrl+F5.
-Everyone re-accepts the updated terms once.
+If push is rejected: `git pull --rebase` then `git push`.
+Wait for the green tick in GitHub -> Actions, open the site, press Ctrl+F5 (on phone: close the tab and reopen).
+IMPORTANT: the repo must be PUBLIC with Settings -> Pages -> Source = "GitHub Actions", otherwise the site shows a 404.
 
-## Step 4 - test with two accounts
-- [ ] Press and hold (phone) / hold or right-click (computer) a message, voice note or photo: emojis appear. Pick one.
-- [ ] Press the + for the full list; tap the same emoji again to remove it.
-- [ ] Account A posts a status. Account B opens it, taps the heart, writes a reply. A hears a chime and sees a notice and a badge on the Status tab.
-- [ ] A opens their status -> "Activity" shows likes and comments (comments can be deleted / reported).
-- [ ] B taps Save on a photo status: the file downloads.
-- [ ] Settings -> Notifications: switch off "Status like and comment beep", repeat the like: no beep.
-- [ ] Settings -> Ringtones: pick one, press Play, add your own audio file, give one friend a different tone, call yourself from the other account.
+## Step 4 - test (two accounts)
+- [ ] Press and hold a message -> "Reply" (or hover on computer -> "Reply"). A bar shows who/what you reply to. Send. The reply shows a quote.
+- [ ] Tap the quote: chat scrolls to the original and flashes it. Works on photos and voice notes too.
+- [ ] Press the X on the bar (or Esc) to cancel a reply.
+- [ ] If the original gets deleted, the quote says "Original message deleted".
+- [ ] Record a voice note, press play immediately: sound plays and the bar stops at the real length. Try dragging the bar.
+- [ ] Other account: the voice note plays without refreshing.
 
 ## Things to know
-- Reactions: one per person per message. Visible to everyone in that chat.
-- Comments on a status are PRIVATE replies (only the author and the writer see them).
-- Saving: the app offers a Save button, but nobody can stop screenshots or screen recording.
-- Ringtones and chosen sounds are stored only on that device/browser. Clearing browser data removes them.
-- Beeps and ringtones only play while the app is open in a browser tab, after the person has clicked once on the page.
+- New voice notes are saved as WAV (bigger: about 2 MB per minute, max 5 minutes ~ 9.6 MB). Old ones stay as they were.
+- You can only reply to a message in the same chat.
+- If a voice note still misbehaves, tell me the phone/browser - I could not reproduce your exact failure here, only remove the known cause.

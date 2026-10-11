@@ -17,7 +17,7 @@ import { attachHold, openReactSheet } from '../ui/react-sheet.js'
 
 const PAGE = 50
 const MAX_LEN = 1000
-const MSG_COLS = 'id, room_id, sender_id, content, created_at, edited_at, attachment_path, attachment_name, attachment_type, attachment_size, attachment_duration'
+const MSG_COLS = 'id, room_id, sender_id, content, created_at, edited_at, attachment_path, attachment_name, attachment_type, attachment_size, attachment_duration, reply_to'
 
 let chat = null
 export function teardownChat() { if (chat) chat.destroy(); chat = null }
@@ -45,6 +45,8 @@ class Chat {
     this.typers = new Map()
     this.players = new Map()
     this.reactions = new Map()
+    this.replyTo = null
+    this.replyCache = new Map()
     this.tab = 'chats'
     this.receipts = true
     this.currentId = null
@@ -90,7 +92,7 @@ class Chat {
     this.attachBtn = h('button', { class: 'btn icon ghost', type: 'button', title: 'Send a photo, video, audio or PDF', 'aria-label': 'Attach a file', onclick: () => this.fileInput.click() }, '📎')
     this.input = h('textarea', {
       class: 'composer-input', rows: 1, maxLength: MAX_LEN, placeholder: 'Write a message…', 'aria-label': 'Message',
-      onkeydown: (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); this.send() } },
+      onkeydown: (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); this.send() } else if (e.key === 'Escape' && this.replyTo) this.setReply(null) },
       oninput: () => {
         this.input.style.height = 'auto'; this.input.style.height = Math.min(this.input.scrollHeight, 140) + 'px'
         this.counter.textContent = this.input.value.length > 800 ? `${this.input.value.length}/${MAX_LEN}` : ''
@@ -111,7 +113,8 @@ class Chat {
       h('span', { class: 'rec-dot', 'aria-hidden': 'true' }), this.recTime, h('span', { class: 'small grow' }, 'Recording…'),
       h('button', { class: 'btn primary round send', type: 'button', 'aria-label': 'Send voice note', title: 'Send voice note', onclick: () => this.finishVoice() }, '➤'))
     this.composerMain = h('div', { class: 'composer-main' }, this.attachBtn, this.fileInput, this.input, this.counter, this.sendBtn, this.micBtn)
-    this.composer = h('div', { class: 'composer' }, this.composerMain, this.recBar)
+    this.replyBar = h('div', { class: 'reply-bar', hidden: true })
+    this.composer = h('div', { class: 'composer' }, this.replyBar, this.composerMain, this.recBar)
     this.syncSendMic()
     this.empty = h('div', { class: 'empty' }, h('div', { class: 'empty-art', 'aria-hidden': 'true' }, '💬'), h('h2', {}, CONFIG.appName), h('p', {}, 'Select a chat, or start a new one.'))
     this.pane = h('section', { class: 'pane' },
@@ -419,6 +422,7 @@ class Chat {
     }
     this.cancelVoice()
     this.clearTypers()
+    this.setReply(null)
     this.currentId = roomId
     this.unread.delete(roomId)
     this.editingId = null
@@ -447,6 +451,7 @@ class Chat {
     this.messages = data.reverse()
     this.hasMore = data.length === PAGE
     const rx = await loadReactions(id)
+    await this.fetchReplyTargets(this.messages)
     await this.ensurePeople(this.messages.map((m) => m.sender_id))
     if (token !== this.loadToken) return
     this.reactions = rx
@@ -463,6 +468,7 @@ class Chat {
     this.hasMore = data.length === PAGE
     this.messages = data.reverse().concat(this.messages)
     await this.ensurePeople(data.map((m) => m.sender_id))
+    await this.fetchReplyTargets(data)
     const el = this.messagesEl, prev = el.scrollHeight
     this.renderMessages(false)
     el.scrollTop = el.scrollHeight - prev
@@ -513,7 +519,7 @@ class Chat {
       } else if (k === 'video') {
         el.append(h('video', { src: url, controls: true, preload: 'metadata', playsInline: true }))
       } else if (k === 'audio') {
-        if (el.dataset.dur) el.append(this.players.get(el.dataset.attach) || this.voicePlayer(el.dataset.attach, url, Number(el.dataset.dur)))
+        if (el.dataset.dur) el.append(this.players.get(el.dataset.attach) || this.voicePlayer(el.dataset.attach, url, Number(el.dataset.dur), el.dataset.name))
         else el.append(h('audio', { src: url, controls: true, preload: 'none' }))
       }
     }
@@ -574,11 +580,13 @@ class Chat {
       body = [m.attachment_path && this.attachmentEl(m), m.content && h('div', { class: 'text' }, m.content)]   // text only: safe against HTML injection
     }
     const actions = editing ? null : h('div', { class: 'msg-actions' },
+      h('button', { class: 'linkish', type: 'button', onclick: () => this.setReply(m) }, '↩ Reply'),
       h('button', { class: 'linkish', type: 'button', 'aria-label': 'React to this message', onclick: (e) => this.openMenu(m, e.currentTarget.closest('.bubble'), own, iAmAdmin) }, '☺ React'),
       own && h('button', { class: 'linkish', type: 'button', onclick: () => { this.editingId = m.id; this.renderMessages(false) } }, m.attachment_path ? 'Edit caption' : 'Edit'),
       (own || iAmAdmin) && h('button', { class: 'linkish', type: 'button', onclick: () => this.deleteMessage(m) }, 'Delete'),
       !own && h('button', { class: 'linkish', type: 'button', onclick: () => this.reportMessage(m) }, 'Report'))
     const bubble = h('div', { class: 'bubble' },
+        this.quoteEl(m),
         !grouped && h('div', { class: 'meta' }, own ? 'You' : h('button', { class: 'linkish plain', type: 'button', onclick: () => this.showProfile(m.sender_id) }, this.nameOf(m.sender_id))),
         body,
         this.reactionsEl(m),
@@ -586,6 +594,52 @@ class Chat {
         actions)
     if (!editing) attachHold(bubble, (el) => this.openMenu(m, el, own, iAmAdmin))
     return h('div', { class: `msg-row ${own ? 'own' : 'other'}${grouped ? ' grouped' : ''}`, dataset: { id: m.id } }, bubble)
+  }
+
+  /* ---------- replies ---------- */
+  setReply(m) {
+    this.replyTo = m
+    clear(this.replyBar)
+    this.replyBar.hidden = !m
+    if (!m) return
+    this.replyBar.append(h('div', { class: 'reply-quote' }, h('strong', {}, m.sender_id === this.me.id ? 'You' : this.nameOf(m.sender_id)), h('span', {}, this.previewOf(m))),
+      h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Cancel reply', title: 'Cancel reply', onclick: () => this.setReply(null) }, '✕'))
+    this.input.focus()
+  }
+  previewOf(m) {
+    if (m.attachment_path) {
+      const k = kind(m.attachment_type)
+      const label = m.attachment_duration != null ? '🎤 Voice note' : k === 'image' ? '📷 Photo' : k === 'video' ? '🎥 Video' : k === 'audio' ? '🎵 Audio' : `📄 ${m.attachment_name || 'File'}`
+      return m.content ? `${label} · ${m.content.slice(0, 60)}` : label
+    }
+    return (m.content || '').slice(0, 100)
+  }
+  async fetchReplyTargets(list) {
+    const need = [...new Set(list.map((m) => m.reply_to).filter((id) => id && !this.replyCache.has(id) && !this.messages.some((x) => x.id === id) && !list.some((x) => x.id === id)))]
+    for (const m of list) this.replyCache.set(m.id, m)
+    if (!need.length) return
+    const { data } = await supabase.from('messages').select('id, sender_id, content, attachment_path, attachment_name, attachment_type, attachment_duration').in('id', need)
+    const got = new Set()
+    for (const r of data || []) { this.replyCache.set(r.id, r); got.add(r.id) }
+    for (const id of need) if (!got.has(id)) this.replyCache.set(id, null)      // deleted or not visible
+    await this.ensurePeople((data || []).map((r) => r.sender_id))
+  }
+  quoteEl(m) {
+    if (!m.reply_to) return null
+    const t = this.replyCache.get(m.reply_to) ?? this.messages.find((x) => x.id === m.reply_to)
+    if (!t) return h('div', { class: 'quote gone' }, 'Original message deleted')
+    const who = t.sender_id === this.me.id ? 'You' : this.nameOf(t.sender_id)
+    return h('button', { class: 'quote', type: 'button', 'aria-label': `In reply to ${who}: ${this.previewOf(t)}`, onclick: () => this.jumpTo(m.reply_to) },
+      h('strong', {}, who), h('span', {}, this.previewOf(t)))
+  }
+  async jumpTo(id) {
+    for (let i = 0; i < 6; i++) {
+      const row = this.messagesEl.querySelector(`.msg-row[data-id="${id}"]`)
+      if (row) { row.scrollIntoView({ block: 'center', behavior: 'smooth' }); row.classList.add('flash'); setTimeout(() => row.classList.remove('flash'), 1800); return }
+      if (!this.hasMore) break
+      await this.loadOlder()
+    }
+    toast('That message is too far back to show.', 'info')
   }
 
   /* ---------- reactions ---------- */
@@ -610,6 +664,7 @@ class Chat {
     openReactSheet({
       anchor: bubble, current: mineNow, onPick: (e) => this.react(m, e),
       actions: [
+        { icon: '↩', label: 'Reply', onClick: () => this.setReply(m) },
         m.content && { icon: '⧉', label: 'Copy text', onClick: () => navigator.clipboard?.writeText(m.content).then(() => toast('Copied', 'success'), () => toast('Could not copy.', 'error')) },
         m.attachment_path && { icon: '⬇', label: 'Save file', onClick: () => this.saveAttachment(m) },
         own && { icon: '✎', label: m.attachment_path ? 'Edit caption' : 'Edit', onClick: () => { this.editingId = m.id; this.renderMessages(false) } },
@@ -667,6 +722,7 @@ class Chat {
     if (m.room_id === this.currentId) {
       if (this.messages.some((x) => x.id === m.id)) return
       await this.ensurePeople([m.sender_id])
+      await this.fetchReplyTargets([m])
       this.messages.push(m)
       if (!mine) { clearTimeout(this.typers.get(m.sender_id)); this.typers.delete(m.sender_id) }
       this.renderMessages(mine)
@@ -715,20 +771,47 @@ class Chat {
     if (!ok) toast('Could not send the voice note.', 'error')
   }
 
-  voicePlayer(path, url, ms) {
-    const audio = new Audio(); audio.preload = 'metadata'; audio.src = url
+  voicePlayer(path, url, ms, name = 'voice-note') {
+    // The whole (small) file is downloaded first and played from memory: this avoids the streaming
+    // problems some browsers have with voice recordings, and lets us retry with a fresh link.
+    const audio = new Audio(); audio.preload = 'auto'
+    let loaded = false, loading = null
     const btn = h('button', { class: 'vp-btn', type: 'button', 'aria-label': 'Play voice note' }, '▶')
     const fill = h('i'); const bar = h('div', { class: 'vp-bar', role: 'slider', tabIndex: 0, 'aria-label': 'Seek', 'aria-valuemin': 0, 'aria-valuemax': 100 }, fill)
     const time = h('span', { class: 'vp-time' }, fmtDuration(ms))
     const speed = h('button', { class: 'vp-speed', type: 'button', 'aria-label': 'Playback speed' }, '1×')
     const el = h('div', { class: 'voice' }, btn, h('div', { class: 'vp-mid' }, bar, time), speed)
     const total = () => (Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration * 1000 : ms)
-    btn.onclick = () => { if (audio.paused) { for (const p of this.players.values()) if (p._audio !== audio) p._audio.pause(); audio.play().catch(() => toast('Could not play this voice note.', 'error')) } else audio.pause() }
+    const load = () => {
+      if (loaded) return Promise.resolve(true)
+      if (loading) return loading
+      btn.textContent = '…'; btn.disabled = true
+      const grab = async (u) => { const r = await fetch(u); if (!r.ok) throw new Error('http ' + r.status); return r.blob() }
+      loading = (async () => {
+        let blob
+        try { blob = await grab(url) } catch { const fresh = await signedUrl('media', path, name); if (!fresh) throw new Error('no link'); blob = await grab(fresh) }
+        if (!blob.size) throw new Error('empty')
+        audio.src = URL.createObjectURL(blob); loaded = true
+        return true
+      })().catch(() => { toast('Could not load this voice note. Check your connection and try again.', 'error'); return false })
+        .finally(() => { loading = null; btn.disabled = false; btn.textContent = audio.paused ? '▶' : '⏸' })
+      return loading
+    }
+    btn.onclick = async () => {
+      if (!audio.paused) return audio.pause()
+      if (!(await load())) return
+      for (const p of this.players.values()) if (p._audio !== audio) p._audio.pause()
+      try { await audio.play() } catch { toast('Could not play this voice note.', 'error') }
+    }
     audio.onplay = () => { btn.textContent = '⏸'; btn.setAttribute('aria-label', 'Pause') }
     audio.onpause = () => { btn.textContent = '▶'; btn.setAttribute('aria-label', 'Play voice note') }
-    audio.ontimeupdate = () => { const p = Math.min(100, (audio.currentTime * 1000 / total()) * 100); fill.style.width = p + '%'; bar.setAttribute('aria-valuenow', Math.round(p)); time.textContent = fmtDuration(audio.currentTime * 1000) }
-    audio.onended = () => { fill.style.width = '0%'; time.textContent = fmtDuration(ms); btn.textContent = '▶' }
-    bar.onclick = (e) => { const b = bar.getBoundingClientRect(); audio.currentTime = Math.max(0, Math.min(1, (e.clientX - b.left) / b.width)) * total() / 1000 }
+    audio.onerror = () => { loaded = false; btn.textContent = '↻'; btn.setAttribute('aria-label', 'Retry'); toast('This voice note could not be played.', 'error') }
+    audio.ontimeupdate = () => {
+      const t = Math.min(audio.currentTime * 1000, total())
+      const p = Math.min(100, (t / total()) * 100); fill.style.width = p + '%'; bar.setAttribute('aria-valuenow', Math.round(p)); time.textContent = fmtDuration(t)
+    }
+    audio.onended = () => { fill.style.width = '0%'; time.textContent = fmtDuration(ms); btn.textContent = '▶'; audio.currentTime = 0 }
+    bar.onclick = async (e) => { if (!(await load())) return; const b = bar.getBoundingClientRect(); audio.currentTime = Math.max(0, Math.min(1, (e.clientX - b.left) / b.width)) * total() / 1000 }
     bar.onkeydown = (e) => { if (e.key === 'ArrowRight') audio.currentTime += 5; if (e.key === 'ArrowLeft') audio.currentTime -= 5 }
     speed.onclick = () => { const r = audio.playbackRate === 1 ? 1.5 : audio.playbackRate === 1.5 ? 2 : 1; audio.playbackRate = r; speed.textContent = r + '×' }
     el._audio = audio
@@ -744,10 +827,10 @@ class Chat {
     if (content.length > MAX_LEN) return toast(`Messages are limited to ${MAX_LEN} characters.`, 'error')
     this.sending = true; this.sendBtn.disabled = true
     const { data, error } = await supabase.from('messages')
-      .insert({ room_id: this.currentId, sender_id: this.me.id, content }).select(MSG_COLS).single()
+      .insert({ room_id: this.currentId, sender_id: this.me.id, content, ...(this.replyTo ? { reply_to: this.replyTo.id } : {}) }).select(MSG_COLS).single()
     this.sending = false; this.sendBtn.disabled = false
     if (error) return toast(friendlyError(error), 'error')
-    this.input.value = ''; this.input.style.height = 'auto'; this.counter.textContent = ''; this.syncSendMic()
+    this.input.value = ''; this.input.style.height = 'auto'; this.counter.textContent = ''; this.syncSendMic(); this.setReply(null)
     this.onInsert(data)
     this.input.focus()
   }
@@ -786,9 +869,10 @@ class Chat {
         room_id: roomId, sender_id: this.me.id, content: caption.slice(0, MAX_LEN),
         attachment_path: up.path, attachment_name: up.name, attachment_type: up.type, attachment_size: up.size,
         ...(durationMs ? { attachment_duration: durationMs } : {}),
+        ...(this.replyTo && roomId === this.currentId ? { reply_to: this.replyTo.id } : {}),
       }).select(MSG_COLS).single()
       if (error) throw error
-      this.onInsert(data)
+      this.onInsert(data); this.setReply(null)
       return true
     } catch (e) {
       if (up) removeFiles('media', [up.path]).catch(() => {})     // do not leave an orphan upload behind
