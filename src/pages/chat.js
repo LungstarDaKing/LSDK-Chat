@@ -9,8 +9,6 @@ import { RoomEvents, typingEnabled } from '../lib/room-events.js'
 import { startRecording, voiceSupported, fmtDuration } from '../lib/voice.js'
 import { CallManager, supabaseCallApi, callsSupported } from '../lib/calls.js'
 import { CallOverlay, renderCalls } from '../ui/calls-ui.js'
-import { GroupCallManager, supabaseGroupApi } from '../lib/group-calls.js'
-import { GroupCallOverlay } from '../ui/group-call-ui.js'
 import { renderUpdates } from '../ui/stories-ui.js'
 import { sweepMyStories, markStatusSeen, newActivityCount } from '../lib/stories.js'
 import { likeChime, likeSoundEnabled } from '../lib/sound.js'
@@ -22,6 +20,8 @@ import { getNotesRoom, setMarkedUnread, loadMarkedUnread, saveMessage, listSaved
 import { whenDialog, saveDialog } from '../ui/when-dialog.js'
 import { dictationSupported, startDictation, commandOf } from '../lib/dictation.js'
 import { getA11y } from '../lib/a11y.js'
+import { icon } from '../ui/icons.js'
+import logoUrl from '../assets/logo.svg'
 
 const PAGE = 50
 const MAX_LEN = 1000
@@ -39,8 +39,28 @@ export function renderChat(root, roomId, msgId = null) {
 
 const escapeLike = (s) => s.replace(/[\\%_]/g, (c) => '\\' + c)
 const fmtTime = (iso) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-const fmtDay = (iso) => new Date(iso).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
 const sameDay = (a, b) => new Date(a).toDateString() === new Date(b).toDateString()
+const fmtDay = (iso) => {
+  const d = new Date(iso), now = new Date()
+  if (sameDay(d, now)) return 'Today'
+  if (sameDay(d, new Date(now.getTime() - 864e5))) return 'Yesterday'
+  return d.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long', ...(d.getFullYear() !== now.getFullYear() ? { year: 'numeric' } : {}) })
+}
+// Chat-list time: today = clock, yesterday, this week = weekday, otherwise short date.
+const listTime = (iso) => {
+  const d = new Date(iso), now = new Date()
+  if (sameDay(d, now)) return fmtTime(iso)
+  if (sameDay(d, new Date(now.getTime() - 864e5))) return 'Yesterday'
+  if (now - d < 6 * 864e5) return d.toLocaleDateString([], { weekday: 'short' })
+  return d.toLocaleDateString([], { day: 'numeric', month: 'short', ...(d.getFullYear() !== now.getFullYear() ? { year: '2-digit' } : {}) })
+}
+// Each person gets one of six colours (from the Ndebele palette), stable across devices.
+const colourOf = (id = '') => { let n = 0; for (let i = 0; i < id.length; i++) n = (n * 31 + id.charCodeAt(i)) >>> 0; return n % 6 }
+const draftKey = (id) => `lsdkchat.draft.${id}`
+const getDraft = (id) => { try { return localStorage.getItem(draftKey(id)) || '' } catch { return '' } }
+const putDraft = (id, v) => { try { v ? localStorage.setItem(draftKey(id), v) : localStorage.removeItem(draftKey(id)) } catch { /* ignore */ } }
+const attachIcon = (m) => (m.attachment_duration != null ? 'mic' : { image: 'image', video: 'video', audio: 'music' }[kind(m.attachment_type)] || 'file')
+const attachWord = (m) => (m.attachment_duration != null ? 'Voice note' : { image: 'Photo', video: 'Video', audio: 'Audio' }[kind(m.attachment_type)] || m.attachment_name || 'File')
 
 class Chat {
   constructor(root) {
@@ -69,6 +89,11 @@ class Chat {
     this.sending = false
     this.alive = true
     this.stick = true
+    this.previews = new Map()
+    this.filter = 'all'
+    this.roomsLoaded = false
+    this.loadingMsgs = false
+    this.newBelow = 0
     this.build(root)
     this.init()
   }
@@ -82,29 +107,52 @@ class Chat {
     this.banner = h('div', { class: 'banner', role: 'status', hidden: true }, 'Connection lost - reconnecting…')
     this.badges = { chats: h('span', { class: 'tab-badge', hidden: true }), updates: h('span', { class: 'tab-badge', hidden: true }), calls: h('span', { class: 'tab-badge', hidden: true }) }
     this.tabBtns = {}
-    const tab = (id, icon, label) => {
-      this.tabBtns[id] = h('button', { class: 'tab', type: 'button', role: 'tab', 'aria-selected': 'false', onclick: () => this.setTab(id) },
-        h('span', { class: 'tab-icon', 'aria-hidden': 'true' }, icon, this.badges[id]), h('span', { class: 'tab-label' }, label))
+    const tab = (id, ico, label) => {
+      this.tabBtns[id] = h('button', { class: 'tab', type: 'button', role: 'tab', 'aria-selected': 'false', title: label, onclick: () => this.setTab(id) },
+        h('span', { class: 'tab-icon', 'aria-hidden': 'true' }, icon(ico, 22), this.badges[id]), h('span', { class: 'tab-label' }, label))
       return this.tabBtns[id]
     }
-    this.tabs = h('nav', { class: 'tabs', role: 'tablist', 'aria-label': 'Sections' }, tab('chats', '💬', 'Chats'), tab('updates', '◎', 'Status'), tab('calls', '📞', 'Calls'))
+    const navLink = (href, ico, label) => h('a', { class: 'tab', href, title: label },
+      h('span', { class: 'tab-icon', 'aria-hidden': 'true' }, typeof ico === 'string' ? icon(ico, 22) : ico), h('span', { class: 'tab-label' }, label))
+    this.tabs = h('nav', { class: 'tabs', role: 'tablist', 'aria-label': 'Sections' },
+      tab('chats', 'chat', 'Chats'), tab('updates', 'status', 'Status'), tab('calls', 'phone', 'Calls'),
+      navLink('#/tools', 'grid', 'Tools'), navLink('#/settings', this.avatar(this.me.id, 'xs'), 'You'))
+    this.colTitle = h('h1', { class: 'col-title' }, 'Chats')
+    this.headActions = h('div', { class: 'row tight' },
+      h('button', { class: 'btn icon ghost', type: 'button', title: 'Notes to myself', 'aria-label': 'Notes to myself', onclick: () => this.openNotes() }, icon('note')),
+      h('button', { class: 'btn icon ghost', type: 'button', title: 'New group', 'aria-label': 'New group', onclick: () => this.newGroup() }, icon('users')),
+      h('button', { class: 'btn icon soft', type: 'button', title: 'New chat', 'aria-label': 'New direct chat', onclick: () => this.newDirect() }, icon('compose')))
+    this.searchPill = h('a', { class: 'search-pill', href: '#/tools/search', 'aria-label': 'Search messages (Ctrl+K)' }, icon('search', 18), h('span', {}, 'Search messages'), h('kbd', {}, navigator.platform?.includes('Mac') ? '⌘K' : 'Ctrl K'))
+    this.filterBtns = {}
+    this.filterBar = h('div', { class: 'filters', role: 'group', 'aria-label': 'Filter chats' },
+      [['all', 'All'], ['unread', 'Unread'], ['groups', 'Groups']].map(([id, label]) => (this.filterBtns[id] = h('button', { class: 'fchip', type: 'button', 'aria-pressed': String(id === 'all'), onclick: () => this.setFilter(id) }, label))))
 
     this.paneTitle = h('h2', { class: 'pane-title' })
     this.paneSub = h('div', { class: 'pane-sub' })
     this.paneAvatar = h('span', { class: 'avatar sm' })
-    this.voiceCallBtn = h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Voice call', title: 'Voice call', onclick: () => this.callRoom('voice') }, '📞')
-    this.videoCallBtn = h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Video call', title: 'Video call', onclick: () => this.callRoom('video') }, '🎥')
-    this.infoBtn = h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Chat info', title: 'Chat info', onclick: () => this.openInfo() }, 'ⓘ')
+    this.voiceCallBtn = h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Voice call', title: 'Voice call', onclick: () => this.callPeer(this.peerOf(this.room()), 'voice') }, icon('phone'))
+    this.videoCallBtn = h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Video call', title: 'Video call', onclick: () => this.callPeer(this.peerOf(this.room()), 'video') }, icon('video'))
+    this.infoBtn = h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Chat info', title: 'Chat info', onclick: () => this.openInfo() }, icon('info'))
     this.messagesEl = h('div', { class: 'messages', role: 'log', 'aria-live': getA11y().announce ? 'polite' : 'off', 'aria-label': 'Messages' })
+    this.jumpCount = h('span', { class: 'jump-count', hidden: true })
+    this.jumpBtn = h('button', { class: 'jump', type: 'button', hidden: true, 'aria-label': 'Jump to the latest message', title: 'Latest messages', onclick: () => { this.messagesEl.scrollTo({ top: this.messagesEl.scrollHeight, behavior: 'smooth' }) } }, this.jumpCount, icon('down', 20))
+    this.thread = h('div', { class: 'thread' }, this.messagesEl, this.jumpBtn)
+    this.messagesEl.addEventListener('scroll', () => {
+      const near = this.messagesEl.scrollHeight - this.messagesEl.scrollTop - this.messagesEl.clientHeight < 80
+      this.stick = near
+      if (near) this.newBelow = 0
+      this.syncJump()
+    }, { passive: true })
     this.typingRow = h('div', { class: 'msg-row other typing-row', 'aria-hidden': 'true' }, h('div', { class: 'bubble typing-bubble' }, h('i'), h('i'), h('i')))
     this.fileInput = h('input', { type: 'file', accept: ACCEPT, hidden: true, 'aria-label': 'Choose a file to send',
       onchange: () => { const f = this.fileInput.files[0]; this.fileInput.value = ''; if (f) this.askSendFile(f) } })
-    this.attachBtn = h('button', { class: 'btn icon ghost', type: 'button', title: 'Send a photo, video, audio or PDF', 'aria-label': 'Attach a file', onclick: () => this.fileInput.click() }, '📎')
+    this.attachBtn = h('button', { class: 'btn icon ghost', type: 'button', title: 'Send a photo, video, audio or PDF', 'aria-label': 'Attach a file', onclick: () => this.fileInput.click() }, icon('paperclip'))
     this.input = h('textarea', {
       class: 'composer-input', rows: 1, maxLength: MAX_LEN, placeholder: 'Write a message…', 'aria-label': 'Message',
       onkeydown: (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); this.send() } else if (e.key === 'Escape' && this.replyTo) this.setReply(null) },
       oninput: () => {
-        this.input.style.height = 'auto'; this.input.style.height = Math.min(this.input.scrollHeight, 140) + 'px'
+        this.autosize()
+        if (this.currentId) this.saveDraft()
         this.counter.textContent = this.input.value.length > 800 ? `${this.input.value.length}/${MAX_LEN}` : ''
         this.syncSendMic()
         if (this.input.value) this.events.typing()
@@ -115,27 +163,28 @@ class Chat {
       },
     })
     this.counter = h('span', { class: 'counter' })
-    this.sendBtn = h('button', { class: 'btn primary round send', type: 'button', 'aria-label': 'Send', title: 'Send', onclick: () => this.send() }, '➤')
-    this.schedBtn = h('button', { class: 'btn icon ghost', type: 'button', title: 'Send later', 'aria-label': 'Send this message later', onclick: () => this.scheduleDialog() }, '🗓')
-    this.dictBtn = h('button', { class: 'btn icon ghost', type: 'button', title: 'Dictate (speak to type)', 'aria-label': 'Dictate: speak to type', 'aria-pressed': 'false', onclick: () => this.toggleDictation() }, '🗣')
-    this.micBtn = h('button', { class: 'btn primary round send', type: 'button', 'aria-label': 'Record a voice note', title: 'Record a voice note', onclick: () => this.startVoice() }, '🎤')
+    this.sendBtn = h('button', { class: 'btn primary round send', type: 'button', 'aria-label': 'Send', title: 'Send', onclick: () => this.send() }, icon('send', 20))
+    this.schedBtn = h('button', { class: 'btn icon ghost', type: 'button', title: 'Send later', 'aria-label': 'Send this message later', onclick: () => this.scheduleDialog() }, icon('clock'))
+    this.dictBtn = h('button', { class: 'btn icon ghost', type: 'button', title: 'Dictate (speak to type)', 'aria-label': 'Dictate: speak to type', 'aria-pressed': 'false', onclick: () => this.toggleDictation() }, icon('waveform'))
+    this.micBtn = h('button', { class: 'btn primary round send', type: 'button', 'aria-label': 'Record a voice note', title: 'Record a voice note', onclick: () => this.startVoice() }, icon('mic', 20))
     this.recTime = h('span', { class: 'rec-time' }, '0:00')
     this.recBar = h('div', { class: 'rec-bar', hidden: true },
-      h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Discard recording', title: 'Discard', onclick: () => this.cancelVoice() }, '🗑'),
+      h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Discard recording', title: 'Discard', onclick: () => this.cancelVoice() }, icon('trash')),
       h('span', { class: 'rec-dot', 'aria-hidden': 'true' }), this.recTime, h('span', { class: 'small grow' }, 'Recording…'),
-      h('button', { class: 'btn primary round send', type: 'button', 'aria-label': 'Send voice note', title: 'Send voice note', onclick: () => this.finishVoice() }, '➤'))
+      h('button', { class: 'btn primary round send', type: 'button', 'aria-label': 'Send voice note', title: 'Send voice note', onclick: () => this.finishVoice() }, icon('send', 20)))
     this.composerMain = h('div', { class: 'composer-main' }, this.attachBtn, this.fileInput, this.input, this.counter, this.dictBtn, this.schedBtn, this.sendBtn, this.micBtn)
     this.replyBar = h('div', { class: 'reply-bar', hidden: true })
     this.composer = h('div', { class: 'composer' }, this.replyBar, this.composerMain, this.recBar)
     this.syncSendMic()
-    this.empty = h('div', { class: 'empty' }, h('div', { class: 'empty-art', 'aria-hidden': 'true' }, '💬'), h('h2', {}, CONFIG.appName), h('p', {}, 'Select a chat, or start a new one.'))
-    this.callBanner = h('div', { class: 'call-banner', hidden: true })
+    this.empty = h('div', { class: 'empty' }, h('img', { class: 'empty-logo', src: logoUrl, alt: '', width: 96, height: 96 }), h('h2', {}, CONFIG.appName),
+      h('p', {}, 'Pick a chat on the left, or start a new one.'),
+      h('button', { class: 'btn primary', type: 'button', onclick: () => this.newDirect() }, icon('compose', 18), 'New chat'))
     this.pane = h('section', { class: 'pane' },
       h('header', { class: 'pane-head' },
-        h('button', { class: 'btn icon ghost back', type: 'button', 'aria-label': 'Back to chats', onclick: () => go('#/chat') }, '←'),
+        h('button', { class: 'btn icon ghost back', type: 'button', 'aria-label': 'Back to chats', onclick: () => go('#/chat') }, icon('back')),
         this.paneAvatar,
         h('div', { class: 'pane-titles' }, this.paneTitle, this.paneSub), this.voiceCallBtn, this.videoCallBtn, this.infoBtn),
-      this.callBanner, this.messagesEl, this.composer)
+      this.thread, this.composer)
     // drag & drop a file onto the conversation
     this.pane.addEventListener('dragover', (e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault() })
     this.pane.addEventListener('drop', (e) => {
@@ -145,18 +194,11 @@ class Chat {
 
     this.el = h('div', { class: 'chat' },
       h('a', { class: 'skip-link', href: '#/chat', onclick: (e) => { e.preventDefault(); (this.currentId ? this.input : this.roomList.querySelector('a'))?.focus() } }, 'Skip to conversation'),
-      h('aside', { class: 'sidebar' },
-        h('header', { class: 'side-head' },
-          h('strong', { class: 'app-name' }, CONFIG.appName),
-          h('div', { class: 'row tight' },
-            h('button', { class: 'btn icon ghost', type: 'button', title: 'Notes to myself', 'aria-label': 'Notes to myself', onclick: () => this.openNotes() }, '📝'),
-            h('a', { class: 'btn icon ghost', href: '#/tools', title: 'Search, library, saved, reminders, scheduled', 'aria-label': 'Tools: search, library, saved, reminders, scheduled' }, '🧰'),
-            h('button', { class: 'btn icon ghost', type: 'button', title: 'New direct chat', 'aria-label': 'New direct chat', onclick: () => this.newDirect() }, '✎'),
-            h('button', { class: 'btn icon ghost', type: 'button', title: 'New group', 'aria-label': 'New group', onclick: () => this.newGroup() }, '👥'),
-            h('a', { class: 'btn icon ghost', href: '#/settings', title: 'Settings and profile', 'aria-label': 'Settings and profile' }, this.avatar(this.me.id, 'xs')))),
-        this.banner,
+      h('aside', { class: 'rail' }, h('a', { class: 'rail-logo', href: '#/chat', 'aria-label': `${CONFIG.appName} home` }, h('img', { src: logoUrl, alt: '', width: 40, height: 40 })), this.tabs),
+      h('section', { class: 'list-col', 'aria-label': 'Conversations' },
+        h('header', { class: 'side-head' }, this.colTitle, this.headActions),
+        this.banner, this.searchPill, this.filterBar,
         this.chatsView, this.updatesView, this.callsView,
-        this.tabs,
         h('footer', { class: 'side-foot' }, h('a', { href: '#/terms', target: '_blank', rel: 'noopener' }, 'Terms'), ' · ',
           h('a', { href: '#/privacy', target: '_blank', rel: 'noopener' }, 'Privacy'), ' · ',
           h('a', { href: '#/disclosures', target: '_blank', rel: 'noopener' }, 'Disclosures'))),
@@ -177,8 +219,24 @@ class Chat {
     this.tab = id
     const views = { chats: this.chatsView, updates: this.updatesView, calls: this.callsView }
     for (const [k, v] of Object.entries(views)) { v.hidden = k !== id; this.tabBtns[k]?.setAttribute('aria-selected', String(k === id)); this.tabBtns[k]?.classList.toggle('active', k === id) }
+    this.colTitle.textContent = { chats: 'Chats', updates: 'Status', calls: 'Calls' }[id]
+    this.headActions.hidden = this.searchPill.hidden = this.filterBar.hidden = id !== 'chats'
     if (id === 'updates') { markStatusSeen(); this.badges.updates.hidden = true; this.statusNew = 0; renderUpdates(this.updatesView, this) }
     if (id === 'calls') { try { localStorage.setItem('lsdkchat.callsSeen', new Date().toISOString()) } catch { /* ignore */ } this.badges.calls.hidden = true; renderCalls(this.callsView, this) }
+  }
+
+  setFilter(id) {
+    this.filter = id
+    for (const [k, b] of Object.entries(this.filterBtns)) b.setAttribute('aria-pressed', String(k === id))
+    this.renderRooms()
+  }
+  autosize() { this.input.style.height = 'auto'; const sh = this.input.scrollHeight; if (sh > 0) this.input.style.height = Math.min(sh, 140) + 'px' }
+  saveDraft() { putDraft(this.currentId, this.input.value) }
+  syncJump() {
+    const show = !this.stick && !!this.messages.length
+    this.jumpBtn.hidden = !show
+    this.jumpCount.hidden = !this.newBelow
+    this.jumpCount.textContent = this.newBelow > 99 ? '99+' : String(this.newBelow || '')
   }
 
   syncSendMic() {
@@ -198,16 +256,6 @@ class Chat {
       this.calls = new CallManager({ api: supabaseCallApi(this.me.id), meId: this.me.id,
         onChange: (s) => this.overlay?.update(s), onEnded: (e) => this.onCallEnded(e) })
       this.overlay = new CallOverlay(this, this.calls)
-      this.gcalls = new GroupCallManager({ api: supabaseGroupApi(this.me.id), meId: this.me.id,
-        isBusy: () => this.calls.s.phase !== 'idle',
-        onChange: (s) => this.goverlay?.update(s), onEnded: (e) => this.onGroupCallEnded(e), onFeed: () => this.refreshCallBannerSoon() })
-      this.goverlay = new GroupCallOverlay(this, this.gcalls)
-      // someone phones me one-to-one while I am in a group call: tell them I cannot answer
-      const ringRow = this.calls.onCallRow.bind(this.calls)
-      this.calls.onCallRow = (c) => {
-        if (this.gcalls.busy() && c.status === 'ringing' && c.callee_id === this.me.id) { this.calls.api.decline(c.id).catch(() => {}); return }
-        ringRow(c)
-      }
     }
     newActivityCount(this.me.id).then((n) => { if (this.alive && n && this.tab !== 'updates') this.setStatusBadge(n) }, () => {})
     await this.loadRooms()
@@ -215,6 +263,8 @@ class Chat {
     this.poll = setInterval(() => { if (document.visibilityState === 'visible') this.loadRooms() }, 30000)
     this.onVis = () => { if (document.visibilityState === 'visible') { this.loadRooms(); this.markRead() } }
     document.addEventListener('visibilitychange', this.onVis)
+    this.onKey = (e) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); go('#/tools/search') } }
+    document.addEventListener('keydown', this.onKey)
   }
 
   destroy() {
@@ -222,16 +272,13 @@ class Chat {
     this.alive = false
     clearInterval(this.poll)
     document.removeEventListener('visibilitychange', this.onVis)
+    document.removeEventListener('keydown', this.onKey)
     if (this.channel) supabase.removeChannel(this.channel)
     this.events?.leave()
     this.rec?.cancel()
     this.calls?.hangup?.()
     this.calls?.destroy()
     this.overlay?.hide()
-    clearTimeout(this.bannerT)
-    this.gcalls?.hangup?.()
-    this.gcalls?.destroy()
-    this.goverlay?.hide()
   }
 
   subscribe() {
@@ -258,41 +305,6 @@ class Chat {
     if (!peerId) return
     if (!this.calls) return toast('Calls are not supported in this browser.', 'error')
     try { await this.calls.start(peerId, kind) } catch (e) { toast(friendlyError(e), 'error') }
-  }
-  // one tap in a direct chat calls the person, in a group chat it starts (or joins) a group call
-  async callRoom(kind) {
-    const r = this.room()
-    if (!r || r.notes_owner) return
-    if (r.is_direct) return this.callPeer(this.peerOf(r), kind)
-    if (!this.gcalls) return toast('Calls are not supported in this browser.', 'error')
-    try { await this.gcalls.start(r.id, kind) } catch (e) { toast(friendlyError(e), 'error') }
-  }
-  async startGroupCall(roomId, kind) {
-    if (!this.gcalls) return toast('Calls are not supported in this browser.', 'error')
-    try { await this.gcalls.start(roomId, kind) } catch (e) { toast(friendlyError(e), 'error') }
-  }
-  async joinGroupCall(callId) {
-    if (!this.gcalls) return
-    try { await this.gcalls.join(callId) } catch (e) { toast(friendlyError(e), 'error') }
-  }
-  onGroupCallEnded({ reason, message }) {
-    if (message) toast(message, reason === 'error' ? 'error' : 'info')
-    else if (reason === 'ended') toast('Call ended')
-    if (this.tab === 'calls' && this.alive) renderCalls(this.callsView, this)
-    this.refreshCallBannerSoon()
-  }
-  refreshCallBannerSoon() { clearTimeout(this.bannerT); this.bannerT = setTimeout(() => this.refreshCallBanner(), 400) }
-  // "Group voice call in progress - Join" strip, so people who missed the ring can still jump in
-  async refreshCallBanner() {
-    const r = this.room()
-    if (!this.alive || !this.gcalls || !r || r.is_direct || r.notes_owner) { if (this.callBanner) this.callBanner.hidden = true; return }
-    let call = null
-    try { call = await this.gcalls.api.activeForRoom(r.id) } catch { /* ignore */ }
-    if (!this.alive || this.currentId !== r.id) return
-    if (!call || this.gcalls.s.call?.id === call.id) { this.callBanner.hidden = true; return }
-    clear(this.callBanner).append(h('span', {}, `📞 Group ${call.kind} call in progress`),
-      h('button', { class: 'btn primary small', type: 'button', onclick: () => this.joinGroupCall(call.id) }, 'Join'))
-    this.callBanner.hidden = false
   }
   onCallEnded({ reason, message }) {
     if (message && reason !== 'ended') toast(message, reason === 'error' ? 'error' : 'info')
@@ -354,7 +366,7 @@ class Chat {
   // A round avatar: the first letter now, the picture as soon as its temporary link is ready.
   avatar(id, size = '') {
     const p = this.people.get(id)
-    const el = h('span', { class: `avatar ${size}`, 'aria-hidden': 'true', dataset: p?.avatar_path ? { avatar: p.avatar_path } : {} }, (p?.username || '?').slice(0, 1).toUpperCase())
+    const el = h('span', { class: `avatar ${size} nc-${colourOf(id)}`, 'aria-hidden': 'true', dataset: p?.avatar_path ? { avatar: p.avatar_path } : {} }, (p?.username || '?').slice(0, 1).toUpperCase())
     return el
   }
   async hydrateAvatars(scope) {
@@ -399,7 +411,8 @@ class Chat {
     if (!this.alive) return
     if (error) { toast(friendlyError(error), 'error'); return }
     this.rooms = data
-    await this.loadUnread()
+    await Promise.all([this.loadUnread(), this.loadPreviews()])
+    this.roomsLoaded = true
     for (const r of data) for (const p of r.participants) if (p.profiles) this.people.set(p.profile_id, { ...p.profiles, id: p.profile_id })
     this.renderRooms()
     if (this.currentId) {
@@ -421,11 +434,21 @@ class Chat {
 
   roomAvatar(r, size = '') {
     const peer = this.peerOf(r)
-    if (r.notes_owner) return h('span', { class: `avatar ${size}`, 'aria-hidden': 'true' }, '📝')
-    const el = peer ? this.avatar(peer, size) : h('span', { class: `avatar ${size}`, 'aria-hidden': 'true' }, (r.name || '?').slice(0, 1).toUpperCase())
+    if (r.notes_owner) return h('span', { class: `avatar ${size} nc-note`, 'aria-hidden': 'true' }, icon('note', 22))
+    const el = peer ? this.avatar(peer, size) : h('span', { class: `avatar ${size} nc-${colourOf(r.id)}`, 'aria-hidden': 'true' }, (r.name || '?').slice(0, 1).toUpperCase())
     if (!peer) return el
     const wrap = h('span', { class: 'avatar-wrap' }, el, this.dot(peer))
     return wrap
+  }
+
+  roomPreview(r) {
+    const draft = r.id !== this.currentId ? getDraft(r.id) : ''
+    if (draft) return [h('span', { class: 'draft' }, 'Draft: '), draft.slice(0, 80)]
+    const p = this.previews.get(r.id)
+    if (!p) return r.notes_owner ? 'Only you can see this chat' : r.is_direct ? (describeStatus(this.status.get(this.peerOf(r))) || 'Say hello') : `${r.participants.length} members`
+    const who = p.sender_id === this.me.id ? 'You: ' : !r.is_direct ? `${this.nameOf(p.sender_id)}: ` : ''
+    const media = p.attachment_name != null || p.attachment_type
+    return [who, media && h('span', { class: 'pv-ico' }, icon(attachIcon(p), 14)), media ? (p.content || attachWord(p)) : p.content]
   }
 
   renderRooms() {
@@ -435,27 +458,37 @@ class Chat {
     for (const id of this.flags) if (!this.unread.has(id) && id !== this.currentId) total += 1
     this.badges.chats.textContent = total > 99 ? '99+' : String(total || '')
     this.badges.chats.hidden = !total
-    if (!this.rooms.length) {
-      this.roomList.append(h('li', { class: 'room-empty' }, h('div', { class: 'empty-art', 'aria-hidden': 'true' }, '💬'), h('p', {}, 'No chats yet.'), h('p', { class: 'small' }, 'Use ✎ to message someone or 👥 to create a group.')))
+    if (!this.roomsLoaded) {
+      for (let i = 0; i < 7; i++) this.roomList.append(h('li', { class: 'sk-row', 'aria-hidden': 'true' }, h('i', { class: 'sk sk-av' }), h('span', { class: 'sk-lines' }, h('i', { class: 'sk' }), h('i', { class: 'sk short' }))))
       return
     }
-    for (const r of this.rooms) {
+    if (!this.rooms.length) {
+      this.roomList.append(h('li', { class: 'room-empty' }, h('img', { class: 'empty-logo sm', src: logoUrl, alt: '', width: 72, height: 72 }), h('h2', {}, 'No chats yet'),
+        h('p', { class: 'small' }, 'Start a conversation with a friend, or make a group.'),
+        h('div', { class: 'row center-row' }, h('button', { class: 'btn primary', type: 'button', onclick: () => this.newDirect() }, icon('compose', 18), 'New chat'), h('button', { class: 'btn', type: 'button', onclick: () => this.newGroup() }, icon('users', 18), 'New group'))))
+      return
+    }
+    const shown = this.rooms.filter((r) => this.filter === 'unread' ? (this.unread.get(r.id) || this.flags.has(r.id)) : this.filter === 'groups' ? !r.is_direct : true)
+    if (!shown.length) {
+      this.roomList.append(h('li', { class: 'room-empty' }, h('p', {}, this.filter === 'unread' ? 'You are all caught up.' : 'No groups yet.'), h('button', { class: 'linkish', type: 'button', onclick: () => this.setFilter('all') }, 'Show all chats')))
+      return
+    }
+    for (const r of shown) {
       const n = this.unread.get(r.id) || 0
       const flagged = this.flags.has(r.id) && r.id !== this.currentId
-      const peer = this.peerOf(r)
-      const sub = r.notes_owner ? 'Only you can see this chat' : r.is_direct ? (describeStatus(this.status.get(peer)) || 'Direct chat') : `${r.participants.length} members`
+      const when = this.previews.get(r.id)?.created_at || r.last_message_at
       let held = false
       const link = h('a', { class: `room-item${r.id === this.currentId ? ' active' : ''}${n || flagged ? ' unread' : ''}${flagged ? ' flagged' : ''}`, href: `#/chat/${r.id}`, 'aria-current': r.id === this.currentId ? 'true' : null,
           onclick: (e) => { if (held) { e.preventDefault(); held = false } } },
         this.roomAvatar(r, 'md'),
         h('span', { class: 'room-meta' },
-          h('span', { class: 'room-name' }, this.title(r)),
-          h('span', { class: 'room-sub' }, sub)),
-        n > 0 && h('span', { class: 'count', 'aria-label': `${n} unread` }, n > 99 ? '99+' : n),
-        !n && flagged && h('span', { class: 'count dot', 'aria-label': 'Marked as unread' }, '•'))
+          h('span', { class: 'room-top' }, h('span', { class: 'room-name' }, this.title(r)), when && h('time', { class: 'room-time', datetime: when }, listTime(when))),
+          h('span', { class: 'room-bottom' }, h('span', { class: 'room-sub' }, this.roomPreview(r)),
+            n > 0 && h('span', { class: 'count', 'aria-label': `${n} unread` }, n > 99 ? '99+' : n),
+            !n && flagged && h('span', { class: 'count dot', 'aria-label': 'Marked as unread' }, '•'))))
       attachHold(link, () => { held = true; setTimeout(() => { held = false }, 700); this.roomMenu(r) })
       this.roomList.append(h('li', { class: 'room-li' }, link,
-        h('button', { class: 'room-more', type: 'button', 'aria-label': `Options for ${this.title(r)}`, onclick: () => this.roomMenu(r) }, '⋯')))
+        h('button', { class: 'room-more', type: 'button', 'aria-label': `Options for ${this.title(r)}`, onclick: () => this.roomMenu(r) }, icon('down', 16))))
     }
     this.hydrateAvatars(this.roomList)
   }
@@ -472,12 +505,17 @@ class Chat {
         ? (describeStatus(this.status.get(peer)) || 'Direct chat')
         : r.participants.map((p) => this.nameOf(p.profile_id)).join(', ')
     }
-    this.voiceCallBtn.hidden = this.videoCallBtn.hidden = !!r.notes_owner || !this.calls
-    this.refreshCallBannerSoon()
+    this.voiceCallBtn.hidden = this.videoCallBtn.hidden = !r.is_direct || !this.calls
     const fresh = this.roomAvatar(r, 'sm')
     this.paneAvatar.replaceWith(fresh); this.paneAvatar = fresh
     if (peer) { fresh.classList.add('clickable'); fresh.onclick = () => this.showProfile(peer) }
     this.hydrateAvatars(fresh)
+  }
+
+  async loadPreviews() {
+    const { data, error } = await supabase.rpc('get_room_previews')
+    if (!this.alive || error || !data) return                  // v0.8 SQL not run yet: the list falls back to status lines
+    this.previews = new Map(data.map((p) => [p.room_id, p]))
   }
 
   async loadUnread() {
@@ -515,7 +553,9 @@ class Chat {
     this.reactions = new Map()
     this.hasMore = false
     this.events.join(roomId)
-    this.renderRooms(); this.renderHeader(); this.setPaneVisible(true)
+    this.loadingMsgs = true; this.newBelow = 0; this.stick = true
+    this.input.value = getDraft(roomId); this.syncSendMic()
+    this.renderRooms(); this.renderHeader(); this.setPaneVisible(true); this.autosize()
     this.renderMessages(true)
     this.refreshStatuses()
     await this.loadMessages(true)
@@ -531,7 +571,7 @@ class Chat {
     const { data, error } = await supabase.from('messages').select(MSG_COLS)
       .eq('room_id', id).order('created_at', { ascending: false }).limit(PAGE)
     if (token !== this.loadToken || !this.alive) return
-    if (error) return toast(friendlyError(error), 'error')
+    if (error) { this.loadingMsgs = false; this.renderMessages(false); return toast(friendlyError(error), 'error') }
     this.messages = data.reverse()
     this.hasMore = data.length === PAGE
     const rx = await loadReactions(id)
@@ -539,6 +579,7 @@ class Chat {
     await this.ensurePeople(this.messages.map((m) => m.sender_id))
     if (token !== this.loadToken) return
     this.reactions = rx
+    this.loadingMsgs = false
     this.renderMessages(scrollDown)
   }
 
@@ -564,7 +605,12 @@ class Chat {
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120
     clear(el)
     if (this.hasMore) el.append(h('button', { class: 'btn small center', type: 'button', onclick: () => this.loadOlder() }, 'Load earlier messages'))
-    if (!this.messages.length && !this.hasMore) el.append(h('p', { class: 'hint' }, 'No messages yet. Say hello!'))
+    if (this.loadingMsgs && !this.messages.length) {
+      for (const [own, w] of [[0, 52], [0, 38], [1, 44], [0, 64], [1, 30]]) el.append(h('div', { class: `msg-row ${own ? 'own' : 'other'} sk-msg`, 'aria-hidden': 'true' }, h('i', { class: 'sk', dataset: { w } })))
+      el.querySelectorAll('.sk-msg .sk').forEach((n) => { n.style.width = n.dataset.w + '%' })
+    } else if (!this.messages.length && !this.hasMore) {
+      el.append(h('div', { class: 'thread-empty' }, h('span', { class: 'te-ico' }, icon('chat', 30)), h('strong', {}, 'No messages yet'), h('span', { class: 'small' }, 'Say hello - it only takes one message to start.')))
+    }
     const r = this.room(); const iAmAdmin = this.myRole(r) === 'admin'
     this.lastSeenId = null
     for (const m of this.messages) {
@@ -579,7 +625,8 @@ class Chat {
     }
     if (this.typers.size) el.append(this.typingRow)
     this.stick = !!(scrollDown || nearBottom)
-    if (this.stick) el.scrollTop = el.scrollHeight
+    if (this.stick) { el.scrollTop = el.scrollHeight; this.newBelow = 0 }
+    this.syncJump()
     this.hydrateAttachments(el)
   }
 
@@ -599,7 +646,7 @@ class Chat {
       if (k === 'image') {
         const img = h('img', { src: url, alt: el.dataset.name, loading: 'lazy', referrerPolicy: 'no-referrer' })
         img.addEventListener('load', () => { if (this.stick) this.messagesEl.scrollTop = this.messagesEl.scrollHeight })
-        el.append(h('a', { href: url, target: '_blank', rel: 'noopener noreferrer', title: 'Open full size' }, img))
+        el.append(h('button', { class: 'img-open', type: 'button', title: 'View photo', 'aria-label': `View photo ${el.dataset.name}`, onclick: () => this.lightbox(url, el.dataset.name) }, img))
       } else if (k === 'video') {
         el.append(h('video', { src: url, controls: true, preload: 'metadata', playsInline: true }))
       } else if (k === 'audio') {
@@ -615,7 +662,9 @@ class Chat {
     const readers = r ? r.participants.filter((p) => p.profile_id !== this.me.id && this.reads.get(p.profile_id) >= new Date(m.created_at)) : []
     const seen = readers.length > 0
     const word = seen && m.id === this.lastSeenId ? (r.is_direct ? ' Seen' : ` Seen by ${readers.length}`) : ''
-    return h('span', { class: `ticks${seen ? ' seen' : ''}`, 'aria-label': seen ? 'Seen' : 'Sent' }, seen ? '✓✓' : '✓', word && h('span', { class: 'seen-word' }, word))
+    if (m._failed) return h('span', { class: 'ticks failed', 'aria-label': 'Not sent' }, icon('info', 14))
+    if (m._pending) return h('span', { class: 'ticks pending', 'aria-label': 'Sending' }, icon('clock', 13))
+    return h('span', { class: `ticks${seen ? ' seen' : ''}`, 'aria-label': seen ? 'Seen' : 'Sent' }, icon(seen ? 'checks' : 'check', 15), word && h('span', { class: 'seen-word' }, word))
   }
 
   attachmentEl(m) {
@@ -629,7 +678,7 @@ class Chat {
         if (!url) return toast('Could not open this file.', 'error')
         const a = h('a', { href: url, rel: 'noopener noreferrer', download: m.attachment_name })
         document.body.append(a); a.click(); a.remove()
-      } }, h('span', { 'aria-hidden': 'true' }, '📄'), h('span', { class: 'fname' }, label))
+      } }, h('span', { class: 'fc-ico', 'aria-hidden': 'true' }, icon('file', 22)), h('span', { class: 'fname' }, label), h('span', { class: 'fc-dl', 'aria-hidden': 'true' }, icon('download', 18)))
     }
     const voice = k === 'audio' && m.attachment_duration != null
     return h('div', { class: `attach ${k}${voice ? ' voice-wrap' : ''}`, dataset: { attach: m.attachment_path, type: m.attachment_type, name: m.attachment_name, ...(voice ? { dur: String(m.attachment_duration) } : {}) } },
@@ -663,26 +712,31 @@ class Chat {
     } else {
       body = [m.attachment_path && this.attachmentEl(m), m.content && h('div', { class: 'text' }, m.content)]   // text only: safe against HTML injection
     }
-    const actions = editing ? null : h('div', { class: 'msg-actions' },
-      h('button', { class: 'linkish', type: 'button', onclick: () => this.setReply(m) }, '↩ Reply'),
-      h('button', { class: 'linkish', type: 'button', 'aria-label': 'React to this message', onclick: (e) => this.openMenu(m, e.currentTarget.closest('.bubble'), own, iAmAdmin) }, '☺ React'),
-      own && h('button', { class: 'linkish', type: 'button', onclick: () => { this.editingId = m.id; this.renderMessages(false) } }, m.attachment_path ? 'Edit caption' : 'Edit'),
-      (own || iAmAdmin) && h('button', { class: 'linkish', type: 'button', onclick: () => this.deleteMessage(m) }, 'Delete'),
-      !own && h('button', { class: 'linkish', type: 'button', onclick: () => this.reportMessage(m) }, 'Report'))
-    const bubble = h('div', { class: 'bubble' },
+    const live = !m._pending && !m._failed
+    const tool = (ico, label, fn) => h('button', { class: 'ma-btn', type: 'button', title: label, 'aria-label': label, onclick: fn }, icon(ico, 16))
+    const actions = editing || !live ? null : h('div', { class: 'msg-actions' },
+      tool('reply', 'Reply', () => this.setReply(m)),
+      tool('smile', 'React to this message', (e) => this.openMenu(m, e.currentTarget.closest('.bubble'), own, iAmAdmin)),
+      tool('more', 'More actions', (e) => this.openMenu(m, e.currentTarget.closest('.bubble'), own, iAmAdmin)))
+    const dm = this.room()?.is_direct
+    const failBar = m._failed ? h('div', { class: 'failbar', role: 'alert' }, h('span', {}, 'Not sent'),
+      h('button', { class: 'linkish', type: 'button', onclick: () => this.retrySend(m) }, 'Retry'),
+      h('button', { class: 'linkish', type: 'button', onclick: () => this.dropPending(m) }, 'Delete')) : null
+    const bubble = h('div', { class: `bubble${m._pending ? ' pending' : ''}${m._failed ? ' failed' : ''}` },
         this.quoteEl(m),
-        !grouped && h('div', { class: 'meta' }, own ? 'You' : h('button', { class: 'linkish plain', type: 'button', onclick: () => this.showProfile(m.sender_id) }, this.nameOf(m.sender_id))),
+        !grouped && !own && !dm && h('div', { class: `meta nm-${colourOf(m.sender_id)}` }, h('button', { class: 'linkish plain', type: 'button', onclick: () => this.showProfile(m.sender_id) }, this.nameOf(m.sender_id))),
         body,
         this.reactionsEl(m),
         h('div', { class: 'foot' }, fmtTime(m.created_at), m.edited_at && ' · edited', own && this.ticks(m)),
+        failBar,
         actions)
-    if (!editing) {
+    if (!editing && live) {
       attachHold(bubble, (el) => this.openMenu(m, el, own, iAmAdmin))
       bubble.tabIndex = 0
       bubble.setAttribute('aria-label', `${own ? 'You' : this.nameOf(m.sender_id)}, ${fmtTime(m.created_at)}: ${m.content || (m.attachment_name ? 'attachment ' + m.attachment_name : '')}. Press Enter for actions.`)
       bubble.addEventListener('keydown', (e) => { if (e.target === bubble && (e.key === 'Enter' || e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10'))) { e.preventDefault(); this.openMenu(m, bubble, own, iAmAdmin) } })
     }
-    return h('div', { class: `msg-row ${own ? 'own' : 'other'}${grouped ? ' grouped' : ''}${m.id === this.flashId ? ' flash' : ''}`, dataset: { id: m.id } }, bubble)
+    return h('div', { class: `msg-row ${own ? 'own' : 'other'}${grouped ? ' grouped' : ''}${m.id === this.flashId ? ' flash' : ''}`, dataset: { id: m.id } }, own && m._failed ? h('span', { class: 'fail-ico', 'aria-hidden': 'true' }, icon('info', 20)) : null, bubble)
   }
 
   /* ---------- replies ---------- */
@@ -692,13 +746,13 @@ class Chat {
     this.replyBar.hidden = !m
     if (!m) return
     this.replyBar.append(h('div', { class: 'reply-quote' }, h('strong', {}, m.sender_id === this.me.id ? 'You' : this.nameOf(m.sender_id)), h('span', {}, this.previewOf(m))),
-      h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Cancel reply', title: 'Cancel reply', onclick: () => this.setReply(null) }, '✕'))
+      h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Cancel reply', title: 'Cancel reply', onclick: () => this.setReply(null) }, icon('x', 18)))
     this.input.focus()
   }
   previewOf(m) {
     if (m.attachment_path) {
       const k = kind(m.attachment_type)
-      const label = m.attachment_duration != null ? '🎤 Voice note' : k === 'image' ? '📷 Photo' : k === 'video' ? '🎥 Video' : k === 'audio' ? '🎵 Audio' : `📄 ${m.attachment_name || 'File'}`
+      const label = m.attachment_duration != null ? 'Voice note' : k === 'image' ? 'Photo' : k === 'video' ? 'Video' : k === 'audio' ? 'Audio' : (m.attachment_name || 'File')
       return m.content ? `${label} · ${m.content.slice(0, 60)}` : label
     }
     return (m.content || '').slice(0, 100)
@@ -757,14 +811,14 @@ class Chat {
     openReactSheet({
       anchor: bubble, current: mineNow, onPick: (e) => this.react(m, e),
       actions: [
-        { icon: '↩', label: 'Reply', onClick: () => this.setReply(m) },
-        { icon: '⏰', label: 'Remind me…', onClick: () => this.remindDialog(m) },
-        { icon: '🔖', label: 'Save message…', onClick: () => this.saveMessageDialog(m) },
-        m.content && { icon: '⧉', label: 'Copy text', onClick: () => navigator.clipboard?.writeText(m.content).then(() => toast('Copied', 'success'), () => toast('Could not copy.', 'error')) },
-        m.attachment_path && { icon: '⬇', label: 'Save file', onClick: () => this.saveAttachment(m) },
-        own && { icon: '✎', label: m.attachment_path ? 'Edit caption' : 'Edit', onClick: () => { this.editingId = m.id; this.renderMessages(false) } },
-        !own && { icon: '⚑', label: 'Report', onClick: () => this.reportMessage(m) },
-        (own || iAmAdmin) && { icon: '🗑', label: 'Delete', danger: true, onClick: () => this.deleteMessage(m) },
+        { icon: 'reply', label: 'Reply', onClick: () => this.setReply(m) },
+        { icon: 'alarm', label: 'Remind me…', onClick: () => this.remindDialog(m) },
+        { icon: 'bookmark', label: 'Save message…', onClick: () => this.saveMessageDialog(m) },
+        m.content && { icon: 'copy', label: 'Copy text', onClick: () => navigator.clipboard?.writeText(m.content).then(() => toast('Copied', 'success'), () => toast('Could not copy.', 'error')) },
+        m.attachment_path && { icon: 'download', label: 'Save file', onClick: () => this.saveAttachment(m) },
+        own && { icon: 'compose', label: m.attachment_path ? 'Edit caption' : 'Edit', onClick: () => { this.editingId = m.id; this.renderMessages(false) } },
+        !own && { icon: 'flag', label: 'Report', onClick: () => this.reportMessage(m) },
+        (own || iAmAdmin) && { icon: 'trash', label: 'Delete', danger: true, onClick: () => this.deleteMessage(m) },
       ],
     })
   }
@@ -807,23 +861,40 @@ class Chat {
   }
 
   /* ---------- realtime handlers ---------- */
+  // Keep the chat list's order, preview line and time in step with a new message.
+  touchRoom(m) {
+    const r = this.room(m.room_id); if (!r) return
+    const old = this.previews.get(m.room_id)
+    if (!old || new Date(m.created_at) >= new Date(old.created_at) || String(old.id || '').startsWith('tmp-')) {
+      this.previews.set(m.room_id, { room_id: m.room_id, sender_id: m.sender_id, content: (m.content || '').slice(0, 140), created_at: m.created_at, attachment_type: m.attachment_type || null, attachment_name: m.attachment_name || null })
+    }
+    r.last_message_at = m.created_at
+    this.rooms.sort((a, b) => new Date(b.last_message_at) - new Date(a.last_message_at))
+    this.renderRooms()
+  }
+
   async onInsert(m) {
     if (!m) return
     const mine = m.sender_id === this.me.id
     const r = this.room(m.room_id)
     if (!r) { this.loadRooms(); if (!mine) { this.unread.set(m.room_id, (this.unread.get(m.room_id) || 0) + 1); notifyIncoming({ inCurrentRoom: false }) } return }
-    r.last_message_at = m.created_at
-    this.rooms.sort((a, b) => new Date(b.last_message_at) - new Date(a.last_message_at))
     if (m.room_id === this.currentId) {
-      if (this.messages.some((x) => x.id === m.id)) return
+      if (this.messages.some((x) => x.id === m.id)) { this.touchRoom(m); return }
+      if (mine) {                                                   // the real copy of a message we are still sending
+        const t = this.messages.findIndex((x) => x._pending && x.content === (m.content || '') && (x.reply_to || null) === (m.reply_to || null))
+        if (t >= 0) { this.messages[t] = m; this.touchRoom(m); this.renderMessages(false); return }
+      }
       await this.ensurePeople([m.sender_id])
       await this.fetchReplyTargets([m])
       this.messages.push(m)
-      if (!mine) { clearTimeout(this.typers.get(m.sender_id)); this.typers.delete(m.sender_id) }
+      if (!mine) {
+        clearTimeout(this.typers.get(m.sender_id)); this.typers.delete(m.sender_id)
+        if (!this.stick) this.newBelow += 1
+      }
       this.renderMessages(mine)
       if (!mine) { notifyIncoming({ inCurrentRoom: true }); this.markRead() }
     } else if (!mine) { this.unread.set(m.room_id, (this.unread.get(m.room_id) || 0) + 1); notifyIncoming({ inCurrentRoom: false }) }
-    this.renderRooms()
+    this.touchRoom(m)
   }
   onUpdate(m) {
     const i = this.messages.findIndex((x) => x.id === m?.id)
@@ -871,7 +942,8 @@ class Chat {
     // problems some browsers have with voice recordings, and lets us retry with a fresh link.
     const audio = new Audio(); audio.preload = 'auto'
     let loaded = false, loading = null
-    const btn = h('button', { class: 'vp-btn', type: 'button', 'aria-label': 'Play voice note' }, '▶')
+    const btn = h('button', { class: 'vp-btn', type: 'button', 'aria-label': 'Play voice note' }, icon('play', 18))
+    const ico = (n) => btn.replaceChildren(icon(n, 18))
     const fill = h('i'); const bar = h('div', { class: 'vp-bar', role: 'slider', tabIndex: 0, 'aria-label': 'Seek', 'aria-valuemin': 0, 'aria-valuemax': 100 }, fill)
     const time = h('span', { class: 'vp-time' }, fmtDuration(ms))
     const speed = h('button', { class: 'vp-speed', type: 'button', 'aria-label': 'Playback speed' }, '1×')
@@ -880,7 +952,7 @@ class Chat {
     const load = () => {
       if (loaded) return Promise.resolve(true)
       if (loading) return loading
-      btn.textContent = '…'; btn.disabled = true
+      btn.classList.add('loading'); btn.disabled = true
       const grab = async (u) => { const r = await fetch(u); if (!r.ok) throw new Error('http ' + r.status); return r.blob() }
       loading = (async () => {
         let blob
@@ -889,7 +961,7 @@ class Chat {
         audio.src = URL.createObjectURL(blob); loaded = true
         return true
       })().catch(() => { toast('Could not load this voice note. Check your connection and try again.', 'error'); return false })
-        .finally(() => { loading = null; btn.disabled = false; btn.textContent = audio.paused ? '▶' : '⏸' })
+        .finally(() => { loading = null; btn.disabled = false; btn.classList.remove('loading'); ico(audio.paused ? 'play' : 'pause') })
       return loading
     }
     btn.onclick = async () => {
@@ -898,14 +970,14 @@ class Chat {
       for (const p of this.players.values()) if (p._audio !== audio) p._audio.pause()
       try { await audio.play() } catch { toast('Could not play this voice note.', 'error') }
     }
-    audio.onplay = () => { btn.textContent = '⏸'; btn.setAttribute('aria-label', 'Pause') }
-    audio.onpause = () => { btn.textContent = '▶'; btn.setAttribute('aria-label', 'Play voice note') }
-    audio.onerror = () => { loaded = false; btn.textContent = '↻'; btn.setAttribute('aria-label', 'Retry'); toast('This voice note could not be played.', 'error') }
+    audio.onplay = () => { ico('pause'); btn.setAttribute('aria-label', 'Pause') }
+    audio.onpause = () => { ico('play'); btn.setAttribute('aria-label', 'Play voice note') }
+    audio.onerror = () => { loaded = false; ico('play'); btn.setAttribute('aria-label', 'Retry'); toast('This voice note could not be played.', 'error') }
     audio.ontimeupdate = () => {
       const t = Math.min(audio.currentTime * 1000, total())
       const p = Math.min(100, (t / total()) * 100); fill.style.width = p + '%'; bar.setAttribute('aria-valuenow', Math.round(p)); time.textContent = fmtDuration(t)
     }
-    audio.onended = () => { fill.style.width = '0%'; time.textContent = fmtDuration(ms); btn.textContent = '▶'; audio.currentTime = 0 }
+    audio.onended = () => { fill.style.width = '0%'; time.textContent = fmtDuration(ms); ico('play'); audio.currentTime = 0 }
     bar.onclick = async (e) => { if (!(await load())) return; const b = bar.getBoundingClientRect(); audio.currentTime = Math.max(0, Math.min(1, (e.clientX - b.left) / b.width)) * total() / 1000 }
     bar.onkeydown = (e) => { if (e.key === 'ArrowRight') audio.currentTime += 5; if (e.key === 'ArrowLeft') audio.currentTime -= 5 }
     speed.onclick = () => { const r = audio.playbackRate === 1 ? 1.5 : audio.playbackRate === 1.5 ? 2 : 1; audio.playbackRate = r; speed.textContent = r + '×' }
@@ -915,19 +987,62 @@ class Chat {
   }
 
   /* ---------- actions ---------- */
+  // Optimistic send: the bubble appears at once (clock icon), then turns into the real message.
+  // If the network fails it stays on screen as "Not sent" with Retry / Delete.
   async send() {
-    if (this.sending || !this.currentId) return
+    if (!this.currentId) return
     const content = this.input.value.trim()
     if (!content) return
     if (content.length > MAX_LEN) return toast(`Messages are limited to ${MAX_LEN} characters.`, 'error')
-    this.sending = true; this.sendBtn.disabled = true
-    const { data, error } = await supabase.from('messages')
-      .insert({ room_id: this.currentId, sender_id: this.me.id, content, ...(this.replyTo ? { reply_to: this.replyTo.id } : {}) }).select(MSG_COLS).single()
-    this.sending = false; this.sendBtn.disabled = false
-    if (error) return toast(friendlyError(error), 'error')
-    this.input.value = ''; this.input.style.height = 'auto'; this.counter.textContent = ''; this.syncSendMic(); this.setReply(null)
-    this.onInsert(data)
+    const tmp = { id: `tmp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, room_id: this.currentId, sender_id: this.me.id, content,
+      created_at: new Date().toISOString(), reply_to: this.replyTo?.id || null, _pending: true }
+    this.input.value = ''; this.input.style.height = 'auto'; this.counter.textContent = ''; putDraft(this.currentId, ''); this.syncSendMic(); this.setReply(null)
+    if (this.replyTo === null && tmp.reply_to) this.fetchReplyTargets([])    // reply preview comes from the cache
+    this.messages.push(tmp)
+    this.touchRoom(tmp)
+    this.renderMessages(true)
     this.input.focus()
+    this.deliver(tmp)
+  }
+
+  async deliver(tmp) {
+    const { data, error } = await supabase.from('messages')
+      .insert({ room_id: tmp.room_id, sender_id: this.me.id, content: tmp.content, ...(tmp.reply_to ? { reply_to: tmp.reply_to } : {}) }).select(MSG_COLS).single()
+    if (!this.alive) return
+    const i = this.messages.findIndex((x) => x.id === tmp.id)
+    if (error) {
+      if (i >= 0) { this.messages[i]._pending = false; this.messages[i]._failed = true; if (tmp.room_id === this.currentId) this.renderMessages(false) }
+      const msg = friendlyError(error)
+      toast(/Network problem/.test(msg) ? 'Message not sent. Check your connection, then tap Retry.' : msg, 'error')
+      return
+    }
+    if (i >= 0) {
+      if (this.messages.some((x) => x.id === data.id)) this.messages.splice(i, 1)      // realtime echo got there first
+      else this.messages[i] = data
+    }
+    this.replyCache.set(data.id, data)
+    this.touchRoom(data)
+    if (tmp.room_id === this.currentId) this.renderMessages(false)
+  }
+
+  retrySend(m) {
+    const t = this.messages.find((x) => x.id === m.id); if (!t) return
+    t._failed = false; t._pending = true; t.created_at = new Date().toISOString()
+    this.renderMessages(false); this.deliver(t)
+  }
+  dropPending(m) { this.messages = this.messages.filter((x) => x.id !== m.id); this.renderMessages(false) }
+
+  lightbox(url, name) {
+    const prev = document.activeElement
+    const close = () => { document.removeEventListener('keydown', onKey, true); box.remove(); prev?.focus?.() }
+    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close() } }
+    const closeBtn = h('button', { class: 'lb-btn', type: 'button', 'aria-label': 'Close', onclick: close }, icon('x', 22))
+    const box = h('div', { class: 'lightbox', role: 'dialog', 'aria-modal': 'true', 'aria-label': name || 'Photo', onclick: (e) => { if (e.target === box || e.target.tagName === 'FIGURE') close() } },
+      h('div', { class: 'lb-bar' }, h('span', { class: 'lb-name' }, name || ''),
+        h('a', { class: 'lb-btn', href: url, target: '_blank', rel: 'noopener noreferrer', 'aria-label': 'Open original in a new tab', title: 'Open original' }, icon('download', 22)), closeBtn),
+      h('figure', {}, h('img', { src: url, alt: name || 'Photo', referrerPolicy: 'no-referrer' })))
+    document.addEventListener('keydown', onKey, true)
+    document.body.append(box); closeBtn.focus()
   }
 
   // Step 1: show what is about to be sent (with an optional caption) so nothing goes out by accident.
@@ -1125,7 +1240,7 @@ class Chat {
   scheduleDialog() {
     const text = this.input.value.trim()
     const r = this.room(); if (!r) return
-    if (!text) return toast('Write a message first, then press 🗓.', 'info')
+    if (!text) return toast('Write a message first, then press the clock button.', 'info')
     const peerName = r.is_direct ? this.nameOf(this.peerOf(r)) : null
     const cb = peerName ? h('input', { type: 'checkbox', id: 'when-online' }) : null
     const extra = peerName ? h('label', { class: 'check', for: 'when-online' }, cb, h('span', {}, ` Instead, send it the next time ${peerName} is online (only works if you both share online status)`)) : null

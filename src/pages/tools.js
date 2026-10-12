@@ -6,7 +6,7 @@ import { state, go } from '../lib/state.js'
 import { fmtSize, signedUrls } from '../lib/media.js'
 import { searchMessages, listSaved, removeSaved, listReminders, removeReminder, listScheduled, removeScheduled, previewText } from '../lib/tools.js'
 
-const TABS = [['search', '🔎 Search'], ['library', '🗂 Library'], ['saved', '🔖 Saved'], ['reminders', '⏰ Reminders'], ['scheduled', '🗓 Scheduled']]
+const TABS = [['search', 'Search'], ['library', 'Library'], ['saved', 'Saved'], ['reminders', 'Reminders'], ['scheduled', 'Scheduled']]
 const fmtWhen = (iso) => new Date(iso).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
 const URL_RE = /https?:\/\/[^\s<>"')]+/gi
 export const linksIn = (t) => [...new Set((t || '').match(URL_RE) || [])].map((u) => u.replace(/[.,;:!?]+$/, ''))
@@ -16,7 +16,7 @@ async function roomNames() {
   const me = state.session.user.id, map = new Map()
   const { data } = await supabase.from('rooms').select('id, name, is_direct, notes_owner, participants(profile_id, profiles(username))')
   for (const r of data || []) {
-    map.set(r.id, r.notes_owner ? '📝 Notes to myself' : r.is_direct ? (r.participants.find((p) => p.profile_id !== me)?.profiles?.username || 'Direct chat') : r.name)
+    map.set(r.id, r.notes_owner ? 'Notes to myself' : r.is_direct ? (r.participants.find((p) => p.profile_id !== me)?.profiles?.username || 'Direct chat') : r.name)
   }
   return map
 }
@@ -29,7 +29,7 @@ export async function renderTools(root, tab = 'search') {
   const nav = h('nav', { class: 'seg wrap tools-tabs', 'aria-label': 'Tools' }, TABS.map(([id, label]) =>
     h('a', { href: `#/tools/${id}`, class: id === tab ? 'on' : '', 'aria-current': id === tab ? 'page' : null }, label)))
   clear(root).append(h('main', { class: 'doc wide' },
-    h('p', {}, h('a', { href: '#/chat' }, '← Back to chats')),
+    h('p', {}, h('a', { href: '#/chat' }, 'Back to chats')),
     h('h1', {}, 'Tools'), nav, body))
   const room = (id) => names.get(id) || 'a chat'
   const empty = (t) => h('p', { class: 'small empty-note' }, t)
@@ -180,7 +180,7 @@ export async function renderTools(root, tab = 'search') {
   const label = { pending: 'Waiting', sent: 'Sent', failed: 'Not sent', expired: 'Expired' }
   const draw = () => {
     list.replaceChildren()
-    if (!rows.length) list.append(h('li', {}, empty('Nothing scheduled. In a chat, write a message and press 🗓 to send it later.')))
+    if (!rows.length) list.append(h('li', {}, empty('Nothing scheduled. In a chat, write a message and press the clock button to send it later.')))
     for (const r of rows) {
       list.append(item({ title: `To ${room(r.room_id)}`, text: r.content,
         sub: `${label[r.status] || r.status} · ${r.when_online ? 'when they come online' : fmtWhen(r.send_at)}${r.error ? ' · ' + r.error : ''}`,

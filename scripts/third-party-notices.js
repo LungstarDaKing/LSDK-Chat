@@ -14,6 +14,7 @@ for (const [dir] of entries.sort()) {
   const file = fs.readdirSync(dir).find((f) => /^(licen[sc]e|copying)(\..*)?$/i.test(f))
   out.push(file ? fs.readFileSync(path.join(dir, file), 'utf8').trim() : '(license text not included in the package; see the license identifier above)', '')
 }
+if (fs.existsSync('scripts/font-licenses.txt')) out.push('', fs.readFileSync('scripts/font-licenses.txt', 'utf8'))
 fs.mkdirSync(outDir, { recursive: true })
 fs.writeFileSync(path.join(outDir, 'third-party-notices.txt'), out.join('\n'))
 console.log(`third-party-notices.txt written to ${outDir} (${entries.length} packages)`)

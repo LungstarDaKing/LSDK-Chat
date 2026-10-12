@@ -1,3 +1,4 @@
+import { icon } from './icons.js'
 import { h, clear, toast, dialog, confirmDialog, friendlyError } from '../lib/dom.js'
 import { loadStories, postTextStory, postMediaStory, markViewed, reportStory, getViewers, deleteStory, TEXT_BGS, getMyLike, setLike, sendComment, getActivity, deleteComment, reportComment, saveStoryMedia } from '../lib/stories.js'
 import { STORY_ACCEPT, signedUrl, fmtSize } from '../lib/media.js'
@@ -120,7 +121,7 @@ function openViewer(list, startGroup, ctx, onClose) {
     media = null
     clear(bars); g.stories.forEach((x, i) => { const f = h('i'); f.style.width = i < si ? '100%' : '0%'; bars.append(h('span', {}, f)) })
     clear(head).append(ctx.avatar(g.authorId, 'sm'), h('div', { class: 'story-who' }, h('strong', {}, mine ? 'You' : ctx.nameOf(g.authorId)), h('small', {}, ago(s.created_at))),
-      h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Close', onclick: close }, '✕'))
+      h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Close', onclick: close }, icon('x', 22)))
     ctx.hydrateAvatars(head)
     clear(body); body.style.background = ''
     clear(foot)
@@ -157,9 +158,9 @@ function openViewer(list, startGroup, ctx, onClose) {
       getActivity(s.id).then((rows) => { if (cur() === s) act.textContent = `♥ ${rows.filter((r) => r.kind === 'like').length} · 💬 ${rows.filter((r) => r.kind === 'comment').length}` }, () => {})
     } else {
       markViewed(s.id)
-      const like = h('button', { class: 'btn icon round like-btn', type: 'button', 'aria-label': 'Like', 'aria-pressed': 'false', title: 'Like' }, '🤍')
+      const like = h('button', { class: 'btn icon round like-btn', type: 'button', 'aria-label': 'Like', 'aria-pressed': 'false', title: 'Like' }, icon('heart', 20))
       let liked = false
-      const paintLike = () => { like.textContent = liked ? '❤️' : '🤍'; like.setAttribute('aria-pressed', String(liked)); like.classList.toggle('on', liked) }
+      const paintLike = () => { like.replaceChildren(icon('heart', 20)); like.classList.toggle('liked', liked); like.setAttribute('aria-pressed', String(liked)); like.classList.toggle('on', liked) }
       getMyLike(s.id, ctx.me.id).then((v) => { if (cur() === s) { liked = v; paintLike() } })
       like.onclick = async () => {
         like.disabled = true
@@ -176,9 +177,9 @@ function openViewer(list, startGroup, ctx, onClose) {
       box.addEventListener('keydown', (e) => { if (e.key !== 'Escape') e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); send() } })
       box.addEventListener('focus', hold); box.addEventListener('blur', () => { if (paused && ov.isConnected && !document.querySelector('dialog[open]')) unhold() })
       foot.append(h('div', { class: 'story-reply' }, box,
-        h('button', { class: 'btn icon round', type: 'button', 'aria-label': 'Send comment', title: 'Send', onclick: send }, '➤'), like),
+        h('button', { class: 'btn icon round', type: 'button', 'aria-label': 'Send comment', title: 'Send', onclick: send }, icon('send', 18)), like),
         h('div', { class: 'story-actions' },
-          s.kind !== 'text' && h('button', { class: 'btn small', type: 'button', onclick: async () => { try { await saveStoryMedia(s); toast('Saved to your downloads', 'success') } catch (e) { toast(friendlyError(e), 'error') } } }, '⬇ Save'),
+          s.kind !== 'text' && h('button', { class: 'btn small', type: 'button', onclick: async () => { try { await saveStoryMedia(s); toast('Saved to your downloads', 'success') } catch (e) { toast(friendlyError(e), 'error') } } }, icon('download', 16), ' Save'),
           h('button', { class: 'btn small', type: 'button', onclick: () => report(s) }, 'Report')))
     }
   }

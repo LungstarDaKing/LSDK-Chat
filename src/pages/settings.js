@@ -51,7 +51,7 @@ export async function renderSettings(root) {
   const addBtn = h('button', { class: 'btn', type: 'button', onclick: () => toneFile.click() })
   const allTones = () => [...STOCK.map((t) => ({ id: t.id, name: t.name, custom: false })), ...listCustom().map((t) => ({ ...t, custom: true }))]
   const drawTones = () => {
-    addBtn.textContent = `🎵 Add my own ringtone (${listCustom().length}/${MAX_CUSTOM})`
+    addBtn.textContent = `Add my own ringtone (${listCustom().length}/${MAX_CUSTOM})`
     clear(toneBox)
     const cur = getPrefs().def
     for (const t of allTones()) toneBox.append(h('div', { class: `tone${t.id === cur ? ' on' : ''}` },
@@ -76,7 +76,7 @@ export async function renderSettings(root) {
     h('div', { class: 'field' }, h('label', {}, 'Text size'), sizeRow),
     contrast.el, motion.el, announce.el,
     dictationSupported()
-      ? h('div', {}, h('div', { class: 'field' }, h('label', { for: 's-dictlang' }, 'Dictation language (🗣 button in a chat)'), langSel,
+      ? h('div', {}, h('div', { class: 'field' }, h('label', { for: 's-dictlang' }, 'Dictation language (waveform button in a chat)'), langSel,
           h('p', { class: 'small' }, 'Dictation uses your browser\'s speech service (the audio may go to its maker, e.g. Google or Apple). Which languages work depends on the browser; isiZulu, isiXhosa and Sesotho support varies and may not work. I cannot guarantee it.')), cmds.el)
       : h('p', { class: 'small' }, 'Dictation (speak to type) is not available in this browser. Chrome, Edge and Safari support it.'),
     h('p', { class: 'small' }, 'Keyboard and screen readers: press Tab to reach a message and Enter for its actions (reply, react, save, remind). In the chat list press the ⋯ button for options. Captions for voice notes and videos are not available yet.'))
@@ -117,7 +117,7 @@ export async function renderSettings(root) {
   drawGrid(); paint()
 
   clear(root).append(h('main', { class: 'doc' },
-    h('p', {}, h('a', { href: '#/chat' }, '← Back to chats')),
+    h('p', {}, h('a', { href: '#/chat' }, 'Back to chats')),
     h('h1', {}, 'Settings'), msg,
     h('section', {}, h('h2', {}, 'Account'),
       h('p', {}, h('strong', {}, state.profile.username), ' · ', state.session.user.email),
@@ -127,7 +127,7 @@ export async function renderSettings(root) {
     h('section', {}, h('h2', {}, 'Appearance'),
       h('div', { class: 'field' }, h('label', {}, 'Theme'), themeRow),
       h('div', { class: 'field' }, h('label', {}, 'Chat background'), preview, grid,
-        h('div', { class: 'row' }, h('button', { class: 'btn', type: 'button', onclick: () => pic.click() }, '🖼 Use my own picture'), pic,
+        h('div', { class: 'row' }, h('button', { class: 'btn', type: 'button', onclick: () => pic.click() }, 'Use my own picture'), pic,
           h('button', { class: 'btn', type: 'button', onclick: () => { removeCustomImage(); drawGrid(); paint() } }, 'Remove my picture'))),
       dimBox,
       h('p', { class: 'small' }, 'Backgrounds and your picture are stored only on this device (in this browser). Nothing is uploaded, and other people do not see your background.')),

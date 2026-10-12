@@ -11,9 +11,13 @@ const set = (k, v) => { try { v == null ? localStorage.removeItem(k) : localStor
 const dots = (c) => `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='44' height='44'%3E%3Ccircle cx='6' cy='6' r='2' fill='${encodeURIComponent(c)}'/%3E%3Ccircle cx='28' cy='28' r='2' fill='${encodeURIComponent(c)}'/%3E%3C/svg%3E")`
 const waves = (c) => `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='24'%3E%3Cpath d='M0 12 Q20 0 40 12 T80 12' fill='none' stroke='${encodeURIComponent(c)}' stroke-width='1.6'/%3E%3C/svg%3E")`
 
+// Ndebele-inspired nested diamonds - the LSDK Chat signature wallpaper.
+const kasi = (c) => { const e = encodeURIComponent(c); return `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='72' height='72'%3E%3Cg fill='none' stroke='${e}' stroke-width='2'%3E%3Cpath d='M36 6 66 36 36 66 6 36z'/%3E%3Cpath d='M36 18 54 36 36 54 18 36z'/%3E%3C/g%3E%3Cpath d='M36 29 43 36 36 43 29 36z M0 0h12L0 12z M72 0H60l12 12z M0 72h12L0 60z M72 72H60l12-12z' fill='${e}'/%3E%3C/svg%3E")` }
+
 // `css` is a full CSS background value. `dark` tells the app which text colour fits best.
 export const BACKGROUNDS = [
-  { id: 'classic',  name: 'Classic',  css: 'var(--chat-plain)' },
+  { id: 'kasi',     name: 'Kasi',     css: `${kasi('#8B6CF61C')}, var(--chat-plain)` },
+  { id: 'classic',  name: 'Plain',    css: 'var(--chat-plain)' },
   { id: 'dots',     name: 'Dots',     css: `${dots('#8b85ff55')}, var(--chat-plain)` },
   { id: 'waves',    name: 'Waves',    css: `${waves('#8b85ff44')}, var(--chat-plain)` },
   { id: 'aurora',   name: 'Aurora',   css: 'linear-gradient(160deg,#0f2027,#203a43 45%,#2c5364)', dark: true },
@@ -28,14 +32,14 @@ export const BACKGROUNDS = [
 export const THEMES = [{ id: 'system', name: 'System' }, { id: 'light', name: 'Light' }, { id: 'dark', name: 'Dark' }]
 
 export const getTheme = () => (['light', 'dark'].includes(get(K_THEME)) ? get(K_THEME) : 'system')
-export const getBackgroundId = () => get(K_BG, 'classic')
+export const getBackgroundId = () => get(K_BG, 'kasi')
 export const getCustomImage = () => get(K_IMG, null)
 export const getDim = () => Math.min(60, Math.max(0, parseInt(get(K_DIM, '25'), 10) || 0))
 
 export function setTheme(t) { set(K_THEME, t === 'system' ? null : t); apply() }
 export function setBackground(id) { set(K_BG, id); apply() }
 export function setDim(n) { set(K_DIM, String(n)); apply() }
-export function removeCustomImage() { set(K_IMG, null); if (getBackgroundId() === 'custom') set(K_BG, 'classic'); apply() }
+export function removeCustomImage() { set(K_IMG, null); if (getBackgroundId() === 'custom') set(K_BG, 'kasi'); apply() }
 
 // Resize to max 1600 px and re-save as JPEG so it fits in browser storage (and drops EXIF/GPS).
 export async function setCustomImage(file) {
@@ -107,8 +111,8 @@ export function apply() {
   const id = effectiveId()
   root.style.setProperty('--chat-bg', backgroundCss(id, getDim(), effectiveImage()))
   const dark = id === 'custom' ? true : !!BACKGROUNDS.find((b) => b.id === id)?.dark
-  root.dataset.chatbg = id === 'classic' || id === 'dots' || id === 'waves' ? 'plain' : dark ? 'dark' : 'light'
+  root.dataset.chatbg = id === 'classic' || id === 'kasi' || id === 'dots' || id === 'waves' ? 'plain' : dark ? 'dark' : 'light'
   const meta = document.querySelector('meta[name=theme-color]')
-  if (meta) meta.setAttribute('content', getComputedStyle(root).getPropertyValue('--accent').trim() || '#4f46e5')
+  if (meta) meta.setAttribute('content', getComputedStyle(root).getPropertyValue('--accent').trim() || '#6B46F5')
 }
 apply()

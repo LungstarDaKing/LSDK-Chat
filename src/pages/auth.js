@@ -3,6 +3,8 @@ import { h, clear, friendlyError, toast } from '../lib/dom.js'
 import { CONFIG } from '../config.js'
 import { TERMS_VERSION } from '../version.js'
 import { flash, setFlash, go, state } from '../lib/state.js'
+import { icon } from '../ui/icons.js'
+import logoUrl from '../assets/logo.svg'
 
 const MIN_PASSWORD = 10
 const USERNAME_RE = /^[A-Za-z0-9_]{3,20}$/
@@ -14,7 +16,17 @@ const legalLinks = () => [
 
 function field(label, input, hint) {
   const id = input.id
-  return h('div', { class: 'field' }, h('label', { for: id }, label), input, hint && h('small', { id: `${id}-hint` }, hint))
+  let control = input
+  if (input.type === 'password') {
+    const eye = h('button', { class: 'pw-eye', type: 'button', 'aria-label': 'Show password', 'aria-pressed': 'false', onclick: () => {
+      const show = input.type === 'password'
+      input.type = show ? 'text' : 'password'
+      eye.setAttribute('aria-pressed', String(show)); eye.setAttribute('aria-label', show ? 'Hide password' : 'Show password')
+      eye.classList.toggle('on', show)
+    } }, icon('eye', 18))
+    control = h('div', { class: 'pw-wrap' }, input, eye)
+  }
+  return h('div', { class: 'field' }, h('label', { for: id }, label), control, hint && h('small', { id: `${id}-hint` }, hint))
 }
 
 export function renderAuth(root, mode) {
@@ -78,8 +90,8 @@ export function renderAuth(root, mode) {
     field('Email', email),
     mode === 'register' && field('Username', username, 'Visible to other users. 3-20 letters, numbers or _'),
     mode !== 'forgot' && field('Password', password, mode === 'register' ? `At least ${MIN_PASSWORD} characters` : undefined),
-    mode === 'register' && h('label', { class: 'check', for: 'age' }, agreeAge, ` I am ${CONFIG.minAge} or older.`),
-    mode === 'register' && h('label', { class: 'check', for: 'agree' }, agreeTerms, ' I have read and agree to the ', ...legalLinks(), '.'),
+    mode === 'register' && h('label', { class: 'check', for: 'age' }, agreeAge, h('span', {}, `I am ${CONFIG.minAge} or older.`)),
+    mode === 'register' && h('label', { class: 'check', for: 'agree' }, agreeTerms, h('span', {}, 'I have read and agree to the ', ...legalLinks(), '.')),
     msg, submit,
   )
 
@@ -87,13 +99,22 @@ export function renderAuth(root, mode) {
     mode === 'login' && [h('a', { href: '#/register' }, 'Create an account'), ' · ', h('a', { href: '#/forgot' }, 'Forgot password?')],
     mode !== 'login' && h('a', { href: '#/login' }, 'Back to sign in'))
 
-  clear(root).append(h('main', { class: 'center-card' },
-    h('div', { class: 'brand' }, h('span', { class: 'logo', 'aria-hidden': 'true' }, '💬'), h('h1', {}, CONFIG.appName)),
-    h('p', { class: 'sub' }, mode === 'register' ? 'Create your account' : mode === 'forgot' ? 'Reset your password' : 'Sign in to continue'),
-    h('p', { class: 'beta' }, 'Test release - not end-to-end encrypted. Read the ', h('a', { href: '#/disclosures', target: '_blank', rel: 'noopener' }, 'disclosures'), '.'),
-    form, links,
-    h('footer', { class: 'legal-foot' }, ...legalLinks()),
-  ))
+  const heading = mode === 'register' ? 'Create your account' : mode === 'forgot' ? 'Reset your password' : 'Welcome back'
+  const lead = mode === 'register' ? 'Join in under a minute.' : mode === 'forgot' ? 'We will email you a link to choose a new one.' : 'Sign in to pick up your chats.'
+  clear(root).append(h('div', { class: 'auth' },
+    h('aside', { class: 'auth-hero' },
+      h('div', { class: 'hero-brand' }, h('img', { src: logoUrl, alt: '', width: 48, height: 48 }), h('span', {}, CONFIG.appName)),
+      h('div', { class: 'hero-copy' },
+        h('h2', {}, 'Let\'s stay directly konnected.'),
+        h('p', {}, 'Chats, voice notes, calls and statuses with the people who matter - in one place.'),
+        h('ul', { class: 'hero-points' }, ['Voice and video calls', 'Photos, voice notes and files', 'Reminders and messages that send later'].map((t) => h('li', {}, icon('check', 16), t))))),
+    h('main', { class: 'auth-panel' },
+      h('div', { class: 'auth-card' },
+        h('div', { class: 'auth-mark' }, h('img', { src: logoUrl, alt: '', width: 44, height: 44 })),
+        h('h1', {}, heading), h('p', { class: 'sub' }, lead),
+        form, links,
+        h('p', { class: 'beta' }, 'Test release - not end-to-end encrypted. Read the ', h('a', { href: '#/disclosures', target: '_blank', rel: 'noopener' }, 'disclosures'), '.'),
+        h('footer', { class: 'legal-foot' }, ...legalLinks())))))
   email.focus()
 }
 

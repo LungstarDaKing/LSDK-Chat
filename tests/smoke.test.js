@@ -100,7 +100,7 @@ describe('chat page', () => {
     expect(root.querySelector('.messages img, .messages script')).toBeNull()
     expect(window.__pwned).toBe(0)
     expect(root.querySelector('.pane-sub').textContent).toBe('alice, bob<b>')   // member names also inert
-    expect(root.querySelector('.msg-row.other .msg-actions').textContent).toMatch(/Report/)
+    expect(root.querySelector('.msg-row.other .msg-actions [aria-label="React to this message"]')).not.toBeNull()
     // attachment: file name is shown as text, never parsed as HTML; online dot appears for a visible peer
     const chip = root.querySelector('.file-chip')
     expect(chip.textContent).toContain('<b>evil</b>.pdf')
@@ -162,7 +162,7 @@ describe('v0.4 pages', () => {
     const { renderChat, teardownChat } = await import('../src/pages/chat.js')
     const root = document.getElementById('app')
     renderChat(root, 'r1'); await flush(); await flush()
-    expect([...root.querySelectorAll('.tab-label')].map((e) => e.textContent)).toEqual(['Chats', 'Status', 'Calls'])
+    expect([...root.querySelectorAll('.tab-label')].map((e) => e.textContent)).toEqual(['Chats', 'Status', 'Calls', 'Tools', 'You'])
     expect(root.querySelector('[aria-label="Record a voice note"]')).not.toBeNull()
     root.querySelectorAll('.tab')[2].click(); await flush(); await flush()
     expect(root.querySelector('.callsView, .tab-view:not([hidden])').textContent).toMatch(/bob|Recent calls|Former member/)
@@ -194,5 +194,20 @@ describe('v0.5 reactions', () => {
     expect(summarize(m.get('a'))[0]).toEqual({ emoji: '👍', count: 2, users: ['u1', 'u2'] })
     setReaction(m, 'a', 'u1', null); setReaction(m, 'a', 'u2', null); setReaction(m, 'a', 'u3', null)
     expect(m.has('a')).toBe(false)
+  })
+})
+
+describe('v0.8 look and feel', () => {
+  it('shows chat previews, instant send and a failed-send retry state', async () => {
+    const { renderChat, teardownChat } = await import('../src/pages/chat.js')
+    teardownChat()
+    const root = document.getElementById('app')
+    renderChat(root, 'r1'); await flush(); await flush()
+    expect(root.querySelector('.rail .tabs')).not.toBeNull()
+    expect(root.querySelector('.search-pill').getAttribute('href')).toBe('#/tools/search')
+    expect(root.querySelectorAll('.filters .fchip').length).toBe(3)
+    expect(root.querySelector('.room-item .room-time')).not.toBeNull()
+    expect(root.querySelector('.jump')).not.toBeNull()
+    teardownChat()
   })
 })

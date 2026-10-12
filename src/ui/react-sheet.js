@@ -1,5 +1,6 @@
 import { h, clear } from '../lib/dom.js'
 import { QUICK, CATEGORIES } from '../lib/emoji.js'
+import { icon } from './icons.js'
 
 const HOLD_MS = 450
 // Press-and-hold (touch / mouse) or right-click (desktop) on `el` calls `fn(el)`.
@@ -28,9 +29,9 @@ export function openReactSheet({ anchor, current, onPick, actions = [] }) {
   const emojiBtn = (e) => h('button', { type: 'button', class: `rs-emoji${e === current ? ' on' : ''}`, 'aria-label': `React ${e}`, 'aria-pressed': String(e === current), onclick: () => { close(); onPick(e) } }, e)
   for (const e of QUICK) quick.append(emojiBtn(e))
   const more = h('button', { type: 'button', class: 'rs-emoji rs-more', 'aria-label': 'More reactions', 'aria-expanded': 'false', onclick: () => {
-    full.hidden = !full.hidden; more.setAttribute('aria-expanded', String(!full.hidden)); more.textContent = full.hidden ? '＋' : '✕'
+    full.hidden = !full.hidden; more.setAttribute('aria-expanded', String(!full.hidden)); more.replaceChildren(icon(full.hidden ? 'plus' : 'x', 20))
     reposition()
-  } }, '＋')
+  } }, icon('plus', 20))
   quick.append(more)
   const tabs = h('div', { class: 'rs-tabs', role: 'tablist' })
   const grid = h('div', { class: 'rs-grid' })
@@ -41,7 +42,7 @@ export function openReactSheet({ anchor, current, onPick, actions = [] }) {
     tabs.append(h('button', { type: 'button', class: 'rs-tab', role: 'tab', 'aria-label': c.name, title: c.name, onclick: () => sec.scrollIntoView({ block: 'start' }) }, c.icon))
   }
   full.append(tabs, grid)
-  const list = h('div', { class: 'rs-actions' }, actions.filter(Boolean).map((a) => h('button', { type: 'button', class: `rs-action${a.danger ? ' danger' : ''}`, onclick: () => { close(); a.onClick() } }, h('span', { 'aria-hidden': 'true' }, a.icon || ''), a.label)))
+  const list = h('div', { class: 'rs-actions' }, actions.filter(Boolean).map((a) => h('button', { type: 'button', class: `rs-action${a.danger ? ' danger' : ''}`, onclick: () => { close(); a.onClick() } }, h('span', { class: 'rs-ico', 'aria-hidden': 'true' }, a.icon ? icon(a.icon, 18) : null), a.label)))
   const sheet = h('div', { class: 'react-sheet', role: 'dialog', 'aria-label': 'React to message', tabIndex: -1 }, quick, full, list)
   const scrim = h('div', { class: 'rs-scrim' })
 

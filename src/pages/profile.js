@@ -117,7 +117,7 @@ export async function renderProfile(root) {
 
   const hasConsent = p.terms_version === TERMS_VERSION
   clear(root).append(h('main', { class: 'doc' },
-    h('p', {}, h('a', { href: '#/chat' }, hasConsent ? '← Back to chats' : '← Back')),
+    h('p', {}, h('a', { href: '#/chat' }, hasConsent ? 'Back to chats' : 'Back')),
     h('h1', {}, 'Profile'),
 
     h('section', {}, h('h2', {}, 'Profile picture'),

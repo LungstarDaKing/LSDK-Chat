@@ -1,61 +1,50 @@
-# LSDKChat update v0.7 - smart tools + accessibility
+# LSDKChat update v0.8 - the new look
 
-CUMULATIVE pack (includes v0.3 - v0.6.1). It does NOT contain src/config.js, so your settings stay untouched.
+CUMULATIVE pack (includes v0.3 - v0.7). It does NOT contain src/config.js, so your settings stay untouched.
+Group calls, translation and Music Mode are NOT in this pack (parked for later).
 
 ## What is new
-- **Notes to myself** (📝 button at the top of the chat list): a private chat only you are in.
-- **Mark chat as unread**: press and hold a chat (or right-click, or the ⋯ button, or Chat info). Shows a dot / bold name until you open it. Syncs across your devices.
-- **Save messages into collections**: hold a message -> "Save message…". See them in Tools -> Saved.
-- **Remind me about a message**: hold a message -> "Remind me…". A pop-up appears when it is due (while the app is open, or next time you open it).
-- **Send later**: write a message, press 🗓, pick a time. Or tick "send when they come online" (direct chats, both people must share online status).
-- **Tools page** (🧰 button): Search (messages / files / links across all your chats), Library (photos, videos, voice notes, music, documents and links sorted automatically, filter by chat), Saved, Reminders, Scheduled.
-- **Open in chat** from any result jumps to that message and flashes it.
-- **Accessibility** (Settings -> Accessibility): 5 text sizes, high contrast, reduce motion, screen-reader announcements on/off, dictation (🗣 in chats) with language choice and voice commands ("send", "clear", "stop"). Tab to a message and press Enter for its actions. Chat list has a ⋯ button for keyboard/screen-reader users. Skip link added.
-- Terms/Privacy updated for the new features (everyone is asked to accept once).
-- "Download my data" now includes saved messages, reminders and scheduled messages.
+- **Completely redesigned look** ("kasi night"): deep-ink navigation rail, King-violet and Crown-gold colours, Bricolage Grotesque + Instrument Sans fonts (bundled, nothing loads from Google), new logo and app icon, Ndebele-inspired diamond wallpaper (new default chat background "Kasi"; anyone who already picked a background keeps theirs).
+- **Desktop**: 3 columns (nav rail | chats | conversation). **Phone**: bottom tab bar (Chats, Status, Calls, Tools, You).
+- **Chat list**: last-message preview ("You: ...", sender name in groups, Photo / Voice note labels), time or day, unread badge, Unread / Groups filters, search bar (Ctrl+K), unsent drafts shown as "Draft: ...". Needs the new SQL (below); without it the list falls back to the old status lines.
+- **Messages send instantly** (clock icon, then ticks). If the network fails the bubble stays with **Not sent - Retry / Delete** instead of vanishing.
+- Cleaner bubbles (no "You" label, names only in groups, coloured per person), hover toolbar (reply / react / more), proper day dividers (Today / Yesterday), **jump-to-latest button with new-message count**, loading skeletons, friendly empty states.
+- **Photo viewer** (click a photo), redesigned voice player and file cards, custom icons everywhere instead of emoji, toasts with icons, rounded dialogs (bottom sheets on phones).
+- New sign-in / register page with a password show/hide button.
+- **Install as an app**: the site now has a web-app manifest, so Chrome/Edge/Android offer "Install app" and iPhone "Add to Home Screen" with the new icon.
+- Drafts are remembered per chat on this device.
 
 ## Step 1 - update the database (Supabase)
 1. https://supabase.com/dashboard -> your project -> **SQL Editor** -> **New query**.
-2. Run, one query each (open in Notepad, Ctrl+A, Ctrl+C, paste, **Run**). Skip any you already ran:
-   a. supabase/update-v0.3.sql
-   b. supabase/update-v0.4.sql
-   c. supabase/update-v0.5.sql
-   d. supabase/update-v0.6.sql
-   e. supabase/update-v0.7.sql   <- the new one
-   Each should say "Success". You may see a NOTICE about pg_cron / pg_trgm: that is fine (see below). A red error = stop and send me the text.
-
-Optional (recommended): Supabase -> Database -> Extensions -> turn on **pg_cron**, then run update-v0.7.sql again. This makes scheduled messages go out every minute even if nobody has the app open. Without it they go out whenever anyone's app is open (usually within a minute, since heartbeats run every ~20 s).
+2. If you have already run v0.3 - v0.7, you only need: **supabase/update-v0.8.sql** (open in Notepad, Ctrl+A, Ctrl+C, paste, Run). It should say "Success". If you skipped earlier ones, run them in order first (v0.3, v0.4, v0.5, v0.6, v0.7, then v0.8).
 
 ## Step 2 - copy the files
-Unzip, open `LSDKChat-update-v0.7`, Ctrl+A, copy, paste into `C:\Users\mthet\Downloads\LSDKChat`,
-choose "Replace the files in the destination", merge folders. Do not touch `src\config.js`.
+Unzip, open `LSDKChat-update-v0.8`, Ctrl+A, copy, paste into `C:\Users\mthet\Downloads\LSDKChat`, choose "Replace the files in the destination", merge folders. Do not touch `src\config.js`.
+(New files: src/theme.css, src/fonts.css, src/ui/icons.js, src/assets/*, public/manifest.webmanifest and icons. `package.json` is unchanged - fonts are bundled locally.)
 
 ## Step 3 - publish
 PowerShell:
     cd C:\Users\mthet\Downloads\LSDKChat
     git add .
-    git commit -m "v0.7 smart tools and accessibility"
+    git commit -m "v0.8 new look"
     git push
 If rejected: `git pull --rebase` then `git push`.
-Wait for the green tick in GitHub -> Actions, open the site, Ctrl+F5 (phone: close the tab and reopen).
-(The repo must be PUBLIC with Pages source = GitHub Actions, or the site shows a 404.)
+Wait for the green tick in GitHub -> Actions, open the site, **Ctrl+F5** (phone: close the tab and reopen; installed app: close and reopen it twice).
 
-## Step 4 - test with two accounts
-- [ ] 📝 -> write a note. The other account cannot see it.
-- [ ] Hold a chat in the list -> Mark as unread. Dot appears; open it and the dot goes.
-- [ ] Hold a message -> Save message… -> Tools -> Saved shows it; Open in chat jumps to it.
-- [ ] Hold a message -> Remind me… -> "In 1 hour" (or pick a time 1-2 minutes ahead) -> pop-up appears when due.
-- [ ] Type a message, press 🗓, pick a time 2 minutes ahead, Schedule. Tools -> Scheduled shows "Waiting"; the message arrives on time and the status becomes "Sent".
-- [ ] Same with "send when they come online": close the other account's tab, schedule, then open the other account: it arrives.
-- [ ] Tools -> Search: type 2+ letters. Files and Links tabs work with an empty box.
-- [ ] Tools -> Library: filter by Photos / Voice notes / Documents / Links.
-- [ ] Settings -> Accessibility: change text size and contrast; try Tab + Enter on a message.
-- [ ] Press 🗣 in Chrome/Edge: speak; say "send".
+## Step 4 - check it
+- [ ] Sign-in page shows the violet/diamond design; sign in.
+- [ ] Desktop: left rail has Chats, Status, Calls, Tools, You. Phone: tab bar at the bottom.
+- [ ] Chat list shows previews and times (if not, v0.8 SQL was not run).
+- [ ] Send a message: it appears at once. Turn off Wi-Fi, send another: it shows "Not sent - Retry"; turn Wi-Fi on, press Retry.
+- [ ] Scroll up in a long chat while the other account sends: a round arrow with a number appears; press it.
+- [ ] Click a photo: viewer opens (Esc closes).
+- [ ] Type half a message, switch chat: the list shows "Draft: ...". Come back: text is restored.
+- [ ] Dark mode (Settings -> Appearance -> Dark) and a phone.
+- [ ] Chrome/Edge address bar -> "Install LSDK Chat".
 
 ## Honest limits
-- Reminders/sounds only work while the app is open in a tab (no push notifications yet).
-- Dictation uses the browser's speech service. isiZulu/isiXhosa/Sesotho may not work in your browser; English and Afrikaans usually do. Voice commands are English only.
-- No captions for voice notes/videos yet (needs transcription, a later release).
-- Scheduled message text is stored on the server until sent (see Privacy). Max 30 waiting messages per person; text only (no files).
-- Saved messages and reminders disappear if the original message is deleted.
-- Not end-to-end encrypted (as before). I tested the database logic and the screens here, but not on a real Supabase project: test with two accounts first.
+- I tested the screens (desktop + phone, light + dark), instant-send and failed-send behaviour, the database function and the production build here, with a simulated backend - not on a real Supabase project with two real accounts. Test that first.
+- The app is still a web page: no push notifications when closed, no offline mode (no service worker). "Install" gives you an app icon and window, not background notifications.
+- Calls on strict networks (some mobile data / campus Wi-Fi) may need a TURN server; unchanged from before.
+- Not end-to-end encrypted (as before).
+- The old emoji icons in a few rarely-used spots (Status viewer text) may still look plain; say so and I will polish them.

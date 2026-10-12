@@ -1,3 +1,4 @@
+import { icon } from '../ui/icons.js'
 // Tiny DOM helper. Strings are ALWAYS inserted as text (never parsed as HTML),
 // which is what keeps user-generated content (usernames, messages) XSS-safe.
 export function h(tag, props = {}, ...children) {
@@ -27,7 +28,7 @@ export function toast(message, kind = 'info') {
     box = h('div', { id: 'toasts', 'aria-live': 'polite', role: 'status' })
     document.body.append(box)
   }
-  const t = h('div', { class: `toast ${kind}` }, message)
+  const t = h('div', { class: `toast ${kind}` }, h('span', { class: 'toast-ico', 'aria-hidden': 'true' }, icon(kind === 'error' ? 'info' : kind === 'success' ? 'check' : 'info', 18)), h('span', { class: 'toast-text' }, message))
   box.append(t)
   setTimeout(() => t.remove(), kind === 'error' ? 6000 : 3500)
 }
@@ -47,7 +48,7 @@ export function dialog({ title, body, actions = [], onClose, wide = false }) {
         finally { btn.disabled = false }
       },
     }, a.label)))
-  dlg.append(h('h2', {}, title), h('div', { class: 'dlg-body' }, body), bar)
+  dlg.append(h('div', { class: 'dlg-head' }, h('h2', {}, title), h('button', { class: 'dlg-x', type: 'button', 'aria-label': 'Close', onclick: close }, icon('x', 20))), h('div', { class: 'dlg-body' }, body), bar)
   dlg.addEventListener('close', () => { dlg.remove(); onClose?.() })
   document.body.append(dlg)
   dlg.showModal()

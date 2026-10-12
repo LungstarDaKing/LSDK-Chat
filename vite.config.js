@@ -6,15 +6,15 @@ import { CONFIG } from './src/config.js'
 // so a <meta> tag is the best available option.
 // v0.3: images/video/audio may load from your Supabase storage (temporary signed links) and from blob: (previews).
 const host = new URL(CONFIG.supabaseUrl).host
-// The TURN relay (Cloudflare Worker) must be allowed too, or the browser silently blocks the request for relay credentials.
-const turn = CONFIG.turnUrl ? ` ${new URL(CONFIG.turnUrl).origin}` : ''
 const csp = [
   "default-src 'none'",
   "script-src 'self'",
   "style-src 'self'",
+  "font-src 'self'",
+  "manifest-src 'self'",
   `img-src 'self' data: blob: https://${host}`,
   `media-src blob: https://${host}`,
-  `connect-src 'self' https://${host} wss://${host}${turn}`,
+  `connect-src 'self' https://${host} wss://${host}`,
   "base-uri 'none'",
   "form-action 'none'",
   "object-src 'none'",

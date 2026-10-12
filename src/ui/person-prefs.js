@@ -53,11 +53,11 @@ export function personalSection(uid, name) {
     h('h4', {}, `Just for ${name}`),
     h('p', { class: 'small' }, 'Only you see these choices, and they are saved on this device.'),
     h('div', { class: 'field' }, h('label', {}, 'Chat background'), grid,
-      h('button', { class: 'btn small', type: 'button', onclick: () => file.click() }, '🖼 Use my own picture'), ' ',
+      h('button', { class: 'btn small', type: 'button', onclick: () => file.click() }, 'Use my own picture'), ' ',
       getPersonImage(uid) && h('button', { class: 'btn small', type: 'button', onclick: () => { removePersonImage(uid); drawBg() } }, 'Remove my picture'), file, msg),
     h('div', { class: 'field' }, h('label', {}, 'Ringtone when they call'), sel,
       h('div', { class: 'row' },
         h('button', { class: 'btn small', type: 'button', onclick: () => previewTone(sel.value || getPrefs().def) }, '▶ Play'),
-        h('button', { class: 'btn small', type: 'button', onclick: () => toneFile.click() }, `🎵 Use my own song (${listCustom().length}/${MAX_CUSTOM} saved)`), toneFile,
+        h('button', { class: 'btn small', type: 'button', onclick: () => toneFile.click() }, `Use my own song (${listCustom().length}/${MAX_CUSTOM} saved)`), toneFile,
         h('button', { class: 'btn small', type: 'button', onclick: () => stopRingtone() }, '■ Stop'))))
 }

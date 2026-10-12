@@ -1,4 +1,6 @@
+import './fonts.css'
 import './styles.css'
+import './theme.css'
 import { supabase } from './lib/supabase.js'
 import { h, clear } from './lib/dom.js'
 import { CONFIG } from './config.js'
@@ -38,7 +40,7 @@ let watching = false
 function showReminder(r) {
   const m = r.messages
   try { likeChime(true) } catch { /* sound is optional */ }
-  dialog({ title: '⏰ Reminder', body: [h('p', {}, previewText(m, 300))],
+  dialog({ title: 'Reminder', body: [h('p', {}, previewText(m, 300))],
     actions: [{ label: 'Dismiss' }, ...(m ? [{ label: 'Open chat', kind: 'primary', onClick: () => { location.hash = `#/chat/${m.room_id}/${m.id}` } }] : [])] })
 }
 
