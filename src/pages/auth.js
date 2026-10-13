@@ -5,6 +5,11 @@ import { TERMS_VERSION } from '../version.js'
 import { flash, setFlash, go, state } from '../lib/state.js'
 import { icon } from '../ui/icons.js'
 import logoUrl from '../assets/logo.svg'
+import { startKonnect } from '../lib/konnect-bg.js'
+import { armAccess, disarmAccess } from '../lib/access.js'
+
+// Sets --i (position) so CSS can stagger the entrance animations. CSSOM is allowed by our CSP; style="" attributes are not.
+const idx = (el, i) => { el.style.setProperty('--i', i); return el }
 
 const MIN_PASSWORD = 10
 const USERNAME_RE = /^[A-Za-z0-9_]{3,20}$/
@@ -52,8 +57,10 @@ export function renderAuth(root, mode) {
     try {
       const em = email.value.trim()
       if (mode === 'login') {
+        armAccess()                                   // plays the "Access granted" animation when sign-in succeeds
         const { error } = await supabase.auth.signInWithPassword({ email: em, password: password.value })
         if (error) {
+          disarmAccess()
           if (/not confirmed/i.test(error.message)) {
             show('Please confirm your email first (check your inbox and spam folder).')
             msg.append(' ', h('button', { type: 'button', class: 'linkish', onclick: async () => {
@@ -103,11 +110,22 @@ export function renderAuth(root, mode) {
   const lead = mode === 'register' ? 'Join in under a minute.' : mode === 'forgot' ? 'We will email you a link to choose a new one.' : 'Sign in to pick up your chats.'
   clear(root).append(h('div', { class: 'auth' },
     h('aside', { class: 'auth-hero' },
+      h('div', { class: 'hero-fx', 'aria-hidden': 'true' },
+        h('canvas', { class: 'konnect' }),
+        h('span', { class: 'orb o1' }), h('span', { class: 'orb o2' }),
+        ['👋', '💬', '🎙️', '📞', '❤️', '✨', '📸', '😂'].map((e) => h('em', { class: 'fb' }, e))),
       h('div', { class: 'hero-brand' }, h('img', { src: logoUrl, alt: '', width: 48, height: 48 }), h('span', {}, CONFIG.appName)),
       h('div', { class: 'hero-copy' },
-        h('h2', {}, 'Let\'s stay directly konnected.'),
-        h('p', {}, 'Chats, voice notes, calls and statuses with the people who matter - in one place.'),
-        h('ul', { class: 'hero-points' }, ['Voice and video calls', 'Photos, voice notes and files', 'Reminders and messages that send later'].map((t) => h('li', {}, icon('check', 16), t))))),
+        h('h2', { 'aria-label': 'Let\u2019s Stay Directly Konnected' },
+          ...['Let\u2019s', 'Stay', 'Directly', 'Konnected'].flatMap((w, i) => [
+            idx(h('span', { class: i === 3 ? 'w k' : 'w', 'aria-hidden': 'true' }, w), i), ' '])),
+        h('p', { class: 'hero-tag' }, 'Far apart. Never out of reach.'),
+        h('p', { class: 'hero-lead' }, 'Chats, voice notes, calls and statuses with the people who matter - in one place.'),
+        h('div', { class: 'hero-label' }, 'Things to do here'),
+        h('ul', { class: 'hero-points' }, [
+          'Make voice and video calls', 'Send photos, voice notes and files', 'Share statuses and stories',
+          'Jump on group calls and play games', 'Set reminders and messages that send later',
+        ].map((t, i) => idx(h('li', {}, icon('check', 16), t), i))))),
     h('main', { class: 'auth-panel' },
       h('div', { class: 'auth-card' },
         h('div', { class: 'auth-mark' }, h('img', { src: logoUrl, alt: '', width: 44, height: 44 })),
@@ -116,6 +134,7 @@ export function renderAuth(root, mode) {
         h('p', { class: 'beta' }, 'Test release - not end-to-end encrypted. Read the ', h('a', { href: '#/disclosures', target: '_blank', rel: 'noopener' }, 'disclosures'), '.'),
         h('footer', { class: 'legal-foot' }, ...legalLinks())))))
   email.focus()
+  startKonnect(root.querySelector('canvas.konnect'))
 }
 
 export function renderReset(root) {
