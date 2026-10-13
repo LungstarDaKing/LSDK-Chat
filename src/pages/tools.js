@@ -5,9 +5,10 @@ import { h, clear, toast, confirmDialog, debounce, friendlyError } from '../lib/
 import { state, go } from '../lib/state.js'
 import { nickOf } from '../lib/nicknames.js'
 import { fmtSize, signedUrls } from '../lib/media.js'
+import { renderSoloList } from '../ui/games-ui.js'
 import { searchMessages, listSaved, removeSaved, listReminders, removeReminder, listScheduled, removeScheduled, previewText } from '../lib/tools.js'
 
-const TABS = [['search', 'Search'], ['library', 'Library'], ['saved', 'Saved'], ['reminders', 'Reminders'], ['scheduled', 'Scheduled']]
+const TABS = [['search', 'Search'], ['library', 'Library'], ['saved', 'Saved'], ['reminders', 'Reminders'], ['scheduled', 'Scheduled'], ['games', 'Games']]
 const fmtWhen = (iso) => new Date(iso).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
 const URL_RE = /https?:\/\/[^\s<>"')]+/gi
 export const linksIn = (t) => [...new Set((t || '').match(URL_RE) || [])].map((u) => u.replace(/[.,;:!?]+$/, ''))
@@ -38,6 +39,8 @@ export async function renderTools(root, tab = 'search') {
     thumb, h('div', { class: 'tool-main' }, h('div', { class: 'tool-title' }, title), text && h('div', { class: 'tool-text' }, text), sub && h('div', { class: 'small' }, sub)),
     h('div', { class: 'tool-actions' }, actions))
   const btn = (label, fn, cls = 'btn small') => h('button', { type: 'button', class: cls, onclick: fn }, label)
+
+  if (tab === 'games') { renderSoloList(body); return }
 
   /* ---------- search ---------- */
   if (tab === 'search') {

@@ -42,6 +42,8 @@ export async function loadCallLog(limit = 50) {
 export const clearCallLog = () => supabase.rpc('hide_call_history')
 
 export const callsSupported = () => !!(window.RTCPeerConnection && navigator.mediaDevices?.getUserMedia)
+// Screen sharing needs getDisplayMedia, which most phone browsers do not offer.
+export const screenShareSupported = () => !!navigator.mediaDevices?.getDisplayMedia
 
 const mediaError = (e) => new Error(e?.name === 'NotAllowedError' ? 'Microphone/camera access was blocked. Allow it in your browser\'s address bar and try again.'
   : e?.name === 'NotFoundError' ? 'No microphone or camera was found.' : 'Could not start the microphone/camera.')
@@ -52,13 +54,14 @@ export class CallManager {
     this.api = api; this.meId = meId; this.onChange = onChange; this.onEnded = onEnded
     this.PC = rtc.RTCPeerConnection || window.RTCPeerConnection
     this.getMedia = rtc.getUserMedia || ((c) => navigator.mediaDevices.getUserMedia(c))
+    this.getScreen = rtc.getDisplayMedia || (navigator.mediaDevices?.getDisplayMedia ? (c) => navigator.mediaDevices.getDisplayMedia(c) : null)
     this.ice = rtc.iceServers || iceServers()
     this.s = this.blank()
     this.buffer = []
     this.unlisten = api.listen((c) => this.onCallRow(c), (sig) => this.onSignal(sig))
     this.poll = setInterval(() => this.checkRinging(), 8000)
   }
-  blank() { return { phase: 'idle', call: null, peerId: null, kind: null, muted: false, camOff: false, local: null, remote: null, error: null, startedAt: null } }
+  blank() { return { phase: 'idle', call: null, peerId: null, kind: null, muted: false, camOff: false, local: null, remote: null, remoteCam: false, screen: null, remoteScreen: null, error: null, startedAt: null } }
   set(patch) { this.s = { ...this.s, ...patch }; this.onChange?.(this.s) }
   destroy() { clearInterval(this.poll); this.unlisten?.(); this.cleanup(); }
 
@@ -136,13 +139,17 @@ export class CallManager {
   async applySignal(sig) {
     const pc = this.pc
     try {
-      if (sig.kind === 'offer') {
+      if (sig.kind === 'offer' || sig.kind === 'answer') {
+        // "Perfect negotiation": if both sides change the call at once, the callee (polite) yields.
+        const collision = sig.kind === 'offer' && (this.makingOffer || pc.signalingState !== 'stable')
+        this.ignoreOffer = !this.polite && collision
+        if (this.ignoreOffer) return
         await pc.setRemoteDescription(sig.payload)
         await this.flushCandidates()
-        const answer = await pc.createAnswer(); await pc.setLocalDescription(answer)
-        await this.api.signal(sig.call_id, 'answer', { type: answer.type, sdp: answer.sdp })
-      } else if (sig.kind === 'answer') {
-        await pc.setRemoteDescription(sig.payload); await this.flushCandidates()
+        if (sig.kind === 'offer') {
+          const answer = await pc.createAnswer(); await pc.setLocalDescription(answer)
+          await this.api.signal(sig.call_id, 'answer', { type: answer.type, sdp: answer.sdp })
+        }
       } else if (sig.kind === 'candidate') {
         if (pc.remoteDescription) await pc.addIceCandidate(sig.payload).catch(() => {})
         else this.cands.push(sig.payload)
@@ -154,15 +161,41 @@ export class CallManager {
   /* ----- WebRTC ----- */
   makePc(local, isCaller = false) {
     const pc = new this.PC({ iceServers: this.ice })
-    this.pc = pc; this.cands = []
+    this.pc = pc; this.cands = []; this.ready = false; this.makingOffer = false; this.ignoreOffer = false
+    this.polite = this.s.call.callee_id === this.meId
+    this.mainId = null; this.screenId = null; this.screenSender = null; this.dc = null
     const callId = this.s.call.id
     for (const t of local.getTracks()) pc.addTrack(t, local)
     const remote = new MediaStream()
-    pc.ontrack = (e) => { remote.addTrack(e.track); this.set({ remote }) }
+    pc.ontrack = (e) => {
+      const st = e.streams[0]
+      if (e.track.kind === 'audio' && !this.mainId) this.mainId = st?.id || 'main'
+      if (e.track.kind === 'video' && st && (st.id === this.screenId || (this.mainId && st.id !== this.mainId))) {
+        this.screenId = st.id
+        const gone = () => { if (this.s.remoteScreen === st) this.set({ remoteScreen: null }) }
+        st.onremovetrack = () => { if (!st.getTracks().length) gone() }
+        e.track.onended = gone
+        this.set({ remoteScreen: st }); return
+      }
+      remote.addTrack(e.track)
+      this.set(e.track.kind === 'video' ? { remote, remoteCam: true, kind: 'video' } : { remote })
+    }
+    pc.ondatachannel = (e) => this.setupChannel(e.channel)
+    if (isCaller) this.setupChannel(pc.createDataChannel('ctl'))
+    pc.onnegotiationneeded = async () => {
+      if (!this.ready) return
+      try {
+        this.makingOffer = true
+        const offer = await pc.createOffer()
+        if (pc.signalingState !== 'stable') return
+        await pc.setLocalDescription(offer)
+        await this.api.signal(callId, 'offer', { type: offer.type, sdp: offer.sdp })
+      } catch { /* the next change will try again */ } finally { this.makingOffer = false }
+    }
     pc.onicecandidate = (e) => { if (e.candidate) this.api.signal(callId, 'candidate', e.candidate.toJSON()).catch(() => {}) }
     pc.onconnectionstatechange = () => {
       const st = pc.connectionState
-      if (st === 'connected') { clearTimeout(this.dropTimer); if (this.s.phase !== 'active') this.set({ phase: 'active', startedAt: Date.now() }) }
+      if (st === 'connected') { clearTimeout(this.dropTimer); this.ready = true; if (this.s.phase !== 'active') this.set({ phase: 'active', startedAt: Date.now() }) }
       else if (st === 'disconnected') { this.dropTimer = setTimeout(() => this.fail('The connection was lost.'), 8000) }
       else if (st === 'failed') this.fail('Could not connect. Some networks (strict firewalls, some mobile networks) block direct calls.')
     }
@@ -170,14 +203,67 @@ export class CallManager {
     const mine = this.buffer.filter((b) => b.call_id === callId); this.buffer = []
     ;(async () => {
       if (isCaller) {
-        try { const offer = await pc.createOffer(); await pc.setLocalDescription(offer); await this.api.signal(callId, 'offer', { type: offer.type, sdp: offer.sdp }) }
-        catch { this.fail('Could not start the call.') }
+        try { this.makingOffer = true; const offer = await pc.createOffer(); await pc.setLocalDescription(offer); await this.api.signal(callId, 'offer', { type: offer.type, sdp: offer.sdp }) }
+        catch { this.fail('Could not start the call.') } finally { this.makingOffer = false }
       }
       for (const m of mine) await this.applySignal(m)
     })()
   }
 
   fail(msg) { const c = this.s.call; if (c) this.api.end(c.id).catch(() => {}); this.cleanup(); this.finish('error', msg) }
+
+  /* ----- small control channel (tells the other side what a stream is) ----- */
+  setupChannel(dc) {
+    this.dc = dc
+    dc.onmessage = (e) => {
+      let m; try { m = JSON.parse(e.data) } catch { return }
+      if (m?.t !== 'screen') return
+      if (m.on) { this.screenId = String(m.id || ''); return }
+      this.screenId = null; this.set({ remoteScreen: null })
+    }
+  }
+  tell(msg) { try { if (this.dc?.readyState === 'open') this.dc.send(JSON.stringify(msg)) } catch { /* ignore */ } }
+
+  /* ----- change the call while it is running ----- */
+  get canChange() { return this.s.phase === 'active' && !!this.pc }
+
+  // Voice call -> video call (or turn the camera back on).
+  async enableVideo() {
+    if (!this.canChange) return
+    const local = this.s.local
+    const existing = local.getVideoTracks()[0]
+    if (existing) { existing.enabled = true; this.set({ camOff: false, kind: 'video' }); return }
+    let cam
+    try { cam = (await this.getMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 } } })).getVideoTracks()[0] }
+    catch (e) { this.set({ error: mediaError(e).message }); throw mediaError(e) }
+    if (!this.canChange) { cam.stop(); return }
+    local.addTrack(cam)
+    this.pc.addTrack(cam, local)       // triggers a new offer to the other person
+    this.set({ camOff: false, kind: 'video', local })
+  }
+
+  async startScreenShare() {
+    if (!this.canChange || this.s.screen) return
+    if (!this.getScreen) throw new Error('Your browser cannot share its screen. Try Chrome, Edge or Firefox on a computer.')
+    let stream
+    try { stream = await this.getScreen({ video: true, audio: false }) }
+    catch (e) { if (e?.name === 'NotAllowedError' || e?.name === 'AbortError') return; throw new Error('Could not start screen sharing.') }
+    if (!this.canChange) { stream.getTracks().forEach((t) => t.stop()); return }
+    const track = stream.getVideoTracks()[0]
+    track.onended = () => this.stopScreenShare()    // the browser's own "Stop sharing" button
+    this.tell({ t: 'screen', on: true, id: stream.id })
+    this.screenSender = this.pc.addTrack(track, stream)
+    this.set({ screen: stream })
+  }
+  stopScreenShare() {
+    const st = this.s.screen
+    if (!st) return
+    st.getTracks().forEach((t) => { t.onended = null; t.stop() })
+    if (this.pc && this.screenSender) { try { this.pc.removeTrack(this.screenSender) } catch { /* ignore */ } }
+    this.screenSender = null
+    this.tell({ t: 'screen', on: false })
+    this.set({ screen: null })
+  }
 
   toggleMute() {
     const on = !this.s.muted
@@ -193,6 +279,7 @@ export class CallManager {
   cleanup() {
     clearTimeout(this.ringTimeout); clearTimeout(this.connectTimer); clearTimeout(this.dropTimer)
     this.s.local?.getTracks().forEach((t) => t.stop())
+    this.s.screen?.getTracks().forEach((t) => { t.onended = null; t.stop() })
     if (this.pc) { try { this.pc.close() } catch { /* ignore */ } }
     this.pc = null; this.cands = []; this.buffer = []
   }

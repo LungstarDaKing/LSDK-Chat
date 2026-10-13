@@ -23,6 +23,7 @@ import { getA11y } from '../lib/a11y.js'
 import { icon } from '../ui/icons.js'
 import { GroupCallManager, supabaseGroupApi } from '../lib/group-calls.js'
 import { GroupCallOverlay } from '../ui/group-call-ui.js'
+import { GamesController } from '../ui/games-ui.js'
 import { loadNicknames, watchNicknames, onNicknames, nickOf, nickFor } from '../lib/nicknames.js'
 import logoUrl from '../assets/logo.svg'
 
@@ -133,6 +134,7 @@ class Chat {
     this.paneTitle = h('h2', { class: 'pane-title' })
     this.paneSub = h('div', { class: 'pane-sub' })
     this.paneAvatar = h('span', { class: 'avatar sm' })
+    this.games = new GamesController(this)
     this.voiceCallBtn = h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Voice call', title: 'Voice call', onclick: () => this.callRoom('voice') }, icon('phone'))
     this.videoCallBtn = h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Video call', title: 'Video call', onclick: () => this.callRoom('video') }, icon('video'))
     this.infoBtn = h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Chat info', title: 'Chat info', onclick: () => this.openInfo() }, icon('info'))
@@ -187,8 +189,8 @@ class Chat {
       h('header', { class: 'pane-head' },
         h('button', { class: 'btn icon ghost back', type: 'button', 'aria-label': 'Back to chats', onclick: () => go('#/chat') }, icon('back')),
         this.paneAvatar,
-        h('div', { class: 'pane-titles' }, this.paneTitle, this.paneSub), this.voiceCallBtn, this.videoCallBtn, this.infoBtn),
-      this.callBanner, this.thread, this.composer)
+        h('div', { class: 'pane-titles' }, this.paneTitle, this.paneSub), this.voiceCallBtn, this.videoCallBtn, this.games.btn, this.infoBtn),
+      this.callBanner, this.games.banner, this.thread, this.composer)
     // drag & drop a file onto the conversation
     this.pane.addEventListener('dragover', (e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault() })
     this.pane.addEventListener('drop', (e) => {
@@ -287,6 +289,7 @@ class Chat {
     this.stopDictation()
     this.alive = false
     this.unNick?.()
+    this.games?.destroy()
     clearInterval(this.poll)
     document.removeEventListener('visibilitychange', this.onVis)
     document.removeEventListener('keydown', this.onKey)
@@ -565,6 +568,7 @@ class Chat {
     }
     this.voiceCallBtn.hidden = this.videoCallBtn.hidden = !!r.notes_owner || !this.calls
     this.refreshCallBannerSoon()
+    this.games.setRoom(r)
     const fresh = this.roomAvatar(r, 'sm')
     this.paneAvatar.replaceWith(fresh); this.paneAvatar = fresh
     if (peer) { fresh.classList.add('clickable'); fresh.onclick = () => this.showProfile(peer) }

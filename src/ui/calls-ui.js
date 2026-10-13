@@ -1,5 +1,5 @@
 import { h, clear, toast, friendlyError } from '../lib/dom.js'
-import { loadCallLog, clearCallLog } from '../lib/calls.js'
+import { loadCallLog, clearCallLog, screenShareSupported } from '../lib/calls.js'
 import { startRingtone, stopRingtone } from '../lib/ringtones.js'
 import { fmtDuration } from '../lib/voice.js'
 import { loadGroupCallLog, clearGroupCallLog } from '../lib/group-calls.js'
@@ -27,9 +27,12 @@ export class CallOverlay {
     this.remote = h('video', { class: 'call-remote', autoplay: true, playsInline: true })
     this.local = h('video', { class: 'call-local', autoplay: true, playsInline: true, muted: true })
     this.local.muted = true
+    this.screenView = h('video', { class: 'call-screen', autoplay: true, playsInline: true, muted: true })
+    this.screenView.muted = true
+    this.sharing = h('div', { class: 'call-sharing', hidden: true })
     this.controls = h('div', { class: 'call-controls' })
     this.el = h('div', { class: 'call-overlay', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Call', tabIndex: -1 },
-      this.remote, this.local, h('div', { class: 'call-center' }, this.avatarBox, this.name, this.status), this.controls)
+      this.remote, this.screenView, this.local, this.sharing, h('div', { class: 'call-center' }, this.avatarBox, this.name, this.status), this.controls)
     document.body.append(this.el)
     this.el.focus()
   }
@@ -39,11 +42,17 @@ export class CallOverlay {
       this.name.textContent = this.ctx.nameOf(peer)
       clear(this.avatarBox).append(this.ctx.avatar(peer, 'xl')); this.ctx.hydrateAvatars(this.avatarBox)
     }
-    const video = s.kind === 'video'
-    this.el.classList.toggle('video', video && s.phase === 'active')
+    const active = s.phase === 'active'
+    const video = s.kind === 'video' || s.remoteCam
+    this.el.classList.toggle('video', active && (video || !!s.remoteScreen))
+    this.el.classList.toggle('has-screen', active && !!s.remoteScreen)
+    if (this.screenView.srcObject !== (s.remoteScreen || null)) { this.screenView.srcObject = s.remoteScreen || null; if (s.remoteScreen) this.screenView.play?.().catch(() => {}) }
+    clear(this.sharing).hidden = !(active && s.screen)
+    if (active && s.screen) this.sharing.append(icon('screen', 18), h('span', {}, 'You are sharing your screen'),
+      h('button', { class: 'btn small', type: 'button', onclick: () => this.mgr.stopScreenShare() }, 'Stop'))
     if (s.local && this.local.srcObject !== s.local) this.local.srcObject = s.local
     if (s.remote && this.remote.srcObject !== s.remote) { this.remote.srcObject = s.remote; this.remote.play?.().catch(() => {}) }
-    this.local.hidden = !(video && s.local && !s.camOff)
+    this.local.hidden = !(s.local && s.local.getVideoTracks().length && !s.camOff && active)
     clearInterval(this.timer)
     const label = { outgoing: `Calling… (${s.kind})`, incoming: `Incoming ${s.kind} call`, connecting: 'Connecting…' }[s.phase]
     if (s.phase === 'active') {
@@ -60,12 +69,17 @@ export class CallOverlay {
       return
     }
     this.controls.append(b('', s.muted ? 'Unmute' : 'Mute', s.muted ? 'mic-off' : 'mic', () => this.mgr.toggleMute(), s.muted))
-    if (s.kind === 'video') this.controls.append(b('', s.camOff ? 'Turn camera on' : 'Turn camera off', s.camOff ? 'video-off' : 'video', () => this.mgr.toggleCamera(), s.camOff))
+    const active = s.phase === 'active'
+    const hasCam = !!s.local?.getVideoTracks().length
+    if (hasCam) this.controls.append(b('', s.camOff ? 'Turn camera on' : 'Turn camera off', s.camOff ? 'video-off' : 'video', () => this.mgr.toggleCamera(), s.camOff))
+    else if (active) this.controls.append(b('', 'Switch to video', 'video', () => this.mgr.enableVideo().catch((e) => toast(e.message))))
+    if (active && screenShareSupported()) this.controls.append(b('', s.screen ? 'Stop sharing screen' : 'Share screen', 'screen',
+      () => (s.screen ? Promise.resolve(this.mgr.stopScreenShare()) : this.mgr.startScreenShare()).catch((e) => toast(e.message)), !!s.screen))
     this.controls.append(b('red hang', 'End call', 'phone-off', () => this.mgr.hangup()))
   }
   hide() {
     stopRingtone(); clearInterval(this.timer)
-    if (this.el) { this.remote.srcObject = null; this.local.srcObject = null; this.el.remove(); this.prev?.focus?.() }
+    if (this.el) { this.remote.srcObject = null; this.local.srcObject = null; this.screenView.srcObject = null; this.el.remove(); this.prev?.focus?.() }
     this.el = null; this.phase = 'idle'
   }
 }

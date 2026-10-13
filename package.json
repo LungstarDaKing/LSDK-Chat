@@ -1,6 +1,6 @@
 {
   "name": "lsdkchat",
-  "version": "0.2.0",
+  "version": "0.11.0",
   "private": true,
   "description": "LSDKChat - small real-time chat app (Vite + Supabase)",
   "type": "module",
@@ -12,12 +12,13 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.45.0"
+    "@supabase/supabase-js": "^2.45.0",
+    "chess.js": "^1.4.0"
   },
   "devDependencies": {
     "jsdom": "^30.1.2",
-    "vite": "^5.4.0",
-    "vitest": "^2.1.9"
+    "vite": "^8.3.4",
+    "vitest": "^5.0.4"
   },
   "engines": {
     "node": ">=18"
