@@ -18,6 +18,7 @@ import './lib/a11y.js'
 import { renderLegal } from './pages/legal.js'
 import { renderConsent } from './pages/consent.js'
 import { startHeartbeat, stopHeartbeat } from './lib/status.js'
+import { stopNicknames } from './lib/nicknames.js'
 import './lib/theme.js'
 
 // Clickjacking protection (GitHub Pages cannot send X-Frame-Options / frame-ancestors).
@@ -32,7 +33,7 @@ const root = document.getElementById('app')
 supabase.auth.onAuthStateChange((event, s) => {
   state.session = s
   if (event === 'PASSWORD_RECOVERY') state.recovering = true
-  if (event === 'SIGNED_OUT') { state.profile = null; state.recovering = false; teardownChat(); stopHeartbeat(); stopReminderWatcher(); watching = false }
+  if (event === 'SIGNED_OUT') { state.profile = null; state.recovering = false; teardownChat(); stopHeartbeat(); stopReminderWatcher(); stopNicknames(); watching = false }
   if (['SIGNED_IN', 'SIGNED_OUT', 'PASSWORD_RECOVERY'].includes(event)) setTimeout(route, 0)
 })
 

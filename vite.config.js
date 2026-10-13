@@ -14,12 +14,15 @@ const csp = [
   "manifest-src 'self'",
   `img-src 'self' data: blob: https://${host}`,
   `media-src blob: https://${host}`,
-  `connect-src 'self' https://${host} wss://${host}`,
+  `connect-src 'self' https://${host} wss://${host}${turn}`,
   "base-uri 'none'",
   "form-action 'none'",
   "object-src 'none'",
   "frame-src 'none'",
 ].join('; ')
+
+// The TURN relay (Cloudflare Worker) must be allowed too, or the browser silently blocks the request for relay credentials.
+const turn = CONFIG.turnUrl ? ` ${new URL(CONFIG.turnUrl).origin}` : ''
 
 export default defineConfig({
   base: './', // works under https://<user>.github.io/<repo>/ without changes

@@ -1,4 +1,5 @@
 import { icon } from './icons.js'
+import { editImage } from './image-editor.js'
 import { h, clear, toast, dialog, confirmDialog, friendlyError } from '../lib/dom.js'
 import { loadStories, postTextStory, postMediaStory, markViewed, reportStory, getViewers, deleteStory, TEXT_BGS, getMyLike, setLike, sendComment, getActivity, deleteComment, reportComment, saveStoryMedia } from '../lib/stories.js'
 import { STORY_ACCEPT, signedUrl, fmtSize } from '../lib/media.js'
@@ -62,18 +63,26 @@ export function openComposer(ctx, done) {
   text.focus()
 }
 
-function mediaComposer(ctx, file, done) {
+function mediaComposer(ctx, original, done) {
+  let file = original
   const caption = h('input', { type: 'text', maxLength: 300, placeholder: 'Add a caption (optional)', 'aria-label': 'Caption' })
   const err = h('div', { class: 'msg error', role: 'alert' })
   let preview = null
-  if (file.type.startsWith('image/')) {
+  const info = h('p', {}, h('strong', {}, file.name.slice(0, 80)), ` · ${fmtSize(file.size)}`)
+  const show = () => {
     const url = URL.createObjectURL(file)
-    preview = h('img', { class: 'preview', src: url, alt: 'Preview' })
     preview.addEventListener('load', () => URL.revokeObjectURL(url), { once: true })
+    preview.src = url
+    info.replaceChildren(h('strong', {}, file.name.slice(0, 80)), ` · ${fmtSize(file.size)}`)
   }
+  const editBtn = file.type.startsWith('image/') && /^image\/(jpeg|png|webp)$/.test(file.type) ? h('button', { class: 'btn', type: 'button', onclick: async () => {
+    const edited = await editImage(file, { title: 'Edit status photo', aspect: 'status', aspects: ['status', 'portrait', 'square', 'wide'] })
+    if (edited) { file = edited; show() }
+  } }, icon('sliders', 16), ' Crop and filters') : null
+  if (file.type.startsWith('image/')) { preview = h('img', { class: 'preview', alt: 'Preview' }); show() }
   dialog({
     title: 'Post this status?',
-    body: [preview, h('p', {}, h('strong', {}, file.name.slice(0, 80)), ` · ${fmtSize(file.size)}`), caption, err],
+    body: [preview, editBtn, info, caption, err],
     actions: [{ label: 'Cancel' }, { label: 'Post', kind: 'primary', onClick: async () => {
       try { toast('Uploading…'); await postMediaStory(ctx.me.id, file, caption.value); toast('Status posted', 'success'); done?.() }
       catch (e) { err.textContent = friendlyError(e); return 'keep-open' }
@@ -171,7 +180,7 @@ function openViewer(list, startGroup, ctx, onClose) {
       const send = async () => {
         const v = box.value.trim(); if (!v) return
         box.disabled = true
-        try { await sendComment(s.id, v); box.value = ''; toast('Sent. Only they can see your comment.', 'success') } catch (e) { toast(friendlyError(e), 'error') }
+        try { await sendComment(s.id, v); box.value = ''; toast('Sent to your chat with them.', 'success') } catch (e) { toast(friendlyError(e), 'error') }
         box.disabled = false; box.focus()
       }
       box.addEventListener('keydown', (e) => { if (e.key !== 'Escape') e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); send() } })
@@ -203,7 +212,7 @@ function openViewer(list, startGroup, ctx, onClose) {
     const draw = () => {
       clear(body)
       body.append(h('h3', {}, `❤️ Likes (${likes.length})`), likes.length ? h('p', {}, likes.map((l) => l.username).join(', ')) : h('p', { class: 'small' }, 'No likes yet.'),
-        h('h3', {}, `💬 Comments (${comments.length})`), h('p', { class: 'small' }, 'Comments are private: only you and the person who wrote them can see them.'),
+        h('h3', {}, `💬 Comments (${comments.length})`), h('p', { class: 'small' }, 'Comments also arrive in your chat with the person, where you can reply.'),
         comments.length ? h('ul', { class: 'members' }, comments.map((c) => h('li', { class: 'comment-li' },
           h('span', { class: 'grow' }, h('strong', {}, c.username), h('span', { class: 'block cm-text' }, c.content), h('small', {}, ago(c.created_at))),
           h('span', { class: 'row tight' },

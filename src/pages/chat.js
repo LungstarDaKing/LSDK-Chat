@@ -21,11 +21,14 @@ import { whenDialog, saveDialog } from '../ui/when-dialog.js'
 import { dictationSupported, startDictation, commandOf } from '../lib/dictation.js'
 import { getA11y } from '../lib/a11y.js'
 import { icon } from '../ui/icons.js'
+import { GroupCallManager, supabaseGroupApi } from '../lib/group-calls.js'
+import { GroupCallOverlay } from '../ui/group-call-ui.js'
+import { loadNicknames, watchNicknames, onNicknames, nickOf, nickFor } from '../lib/nicknames.js'
 import logoUrl from '../assets/logo.svg'
 
 const PAGE = 50
 const MAX_LEN = 1000
-const MSG_COLS = 'id, room_id, sender_id, content, created_at, edited_at, attachment_path, attachment_name, attachment_type, attachment_size, attachment_duration, reply_to'
+const MSG_COLS = '*'          // all columns, so newer columns (status_label, v0.9) never break an older database
 
 let chat = null
 export function teardownChat() { if (chat) chat.destroy(); chat = null }
@@ -130,12 +133,13 @@ class Chat {
     this.paneTitle = h('h2', { class: 'pane-title' })
     this.paneSub = h('div', { class: 'pane-sub' })
     this.paneAvatar = h('span', { class: 'avatar sm' })
-    this.voiceCallBtn = h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Voice call', title: 'Voice call', onclick: () => this.callPeer(this.peerOf(this.room()), 'voice') }, icon('phone'))
-    this.videoCallBtn = h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Video call', title: 'Video call', onclick: () => this.callPeer(this.peerOf(this.room()), 'video') }, icon('video'))
+    this.voiceCallBtn = h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Voice call', title: 'Voice call', onclick: () => this.callRoom('voice') }, icon('phone'))
+    this.videoCallBtn = h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Video call', title: 'Video call', onclick: () => this.callRoom('video') }, icon('video'))
     this.infoBtn = h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Chat info', title: 'Chat info', onclick: () => this.openInfo() }, icon('info'))
     this.messagesEl = h('div', { class: 'messages', role: 'log', 'aria-live': getA11y().announce ? 'polite' : 'off', 'aria-label': 'Messages' })
     this.jumpCount = h('span', { class: 'jump-count', hidden: true })
     this.jumpBtn = h('button', { class: 'jump', type: 'button', hidden: true, 'aria-label': 'Jump to the latest message', title: 'Latest messages', onclick: () => { this.messagesEl.scrollTo({ top: this.messagesEl.scrollHeight, behavior: 'smooth' }) } }, this.jumpCount, icon('down', 20))
+    this.callBanner = h('div', { class: 'call-banner', hidden: true })
     this.thread = h('div', { class: 'thread' }, this.messagesEl, this.jumpBtn)
     this.messagesEl.addEventListener('scroll', () => {
       const near = this.messagesEl.scrollHeight - this.messagesEl.scrollTop - this.messagesEl.clientHeight < 80
@@ -184,7 +188,7 @@ class Chat {
         h('button', { class: 'btn icon ghost back', type: 'button', 'aria-label': 'Back to chats', onclick: () => go('#/chat') }, icon('back')),
         this.paneAvatar,
         h('div', { class: 'pane-titles' }, this.paneTitle, this.paneSub), this.voiceCallBtn, this.videoCallBtn, this.infoBtn),
-      this.thread, this.composer)
+      this.callBanner, this.thread, this.composer)
     // drag & drop a file onto the conversation
     this.pane.addEventListener('dragover', (e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault() })
     this.pane.addEventListener('drop', (e) => {
@@ -256,10 +260,22 @@ class Chat {
       this.calls = new CallManager({ api: supabaseCallApi(this.me.id), meId: this.me.id,
         onChange: (s) => this.overlay?.update(s), onEnded: (e) => this.onCallEnded(e) })
       this.overlay = new CallOverlay(this, this.calls)
+      this.gcalls = new GroupCallManager({ api: supabaseGroupApi(this.me.id), meId: this.me.id,
+        isBusy: () => this.calls.s.phase !== 'idle',
+        onChange: (s) => this.goverlay?.update(s), onEnded: (e) => this.onGroupCallEnded(e), onFeed: () => this.refreshCallBannerSoon() })
+      this.goverlay = new GroupCallOverlay(this, this.gcalls)
+      // someone phones me one-to-one while I am in a group call: tell them I cannot answer
+      const ringRow = this.calls.onCallRow.bind(this.calls)
+      this.calls.onCallRow = (c) => {
+        if (this.gcalls.busy() && c.status === 'ringing' && c.callee_id === this.me.id) { this.calls.api.decline(c.id).catch(() => {}); return }
+        ringRow(c)
+      }
     }
     newActivityCount(this.me.id).then((n) => { if (this.alive && n && this.tab !== 'updates') this.setStatusBadge(n) }, () => {})
     await this.loadRooms()
     this.subscribe()
+    loadNicknames(this.me.id); watchNicknames(this.me.id)
+    this.unNick = onNicknames(() => { if (!this.alive) return; this.renderRooms(); if (this.currentId) { this.renderHeader(); this.renderMessages(false) } })
     this.poll = setInterval(() => { if (document.visibilityState === 'visible') this.loadRooms() }, 30000)
     this.onVis = () => { if (document.visibilityState === 'visible') { this.loadRooms(); this.markRead() } }
     document.addEventListener('visibilitychange', this.onVis)
@@ -270,6 +286,7 @@ class Chat {
   destroy() {
     this.stopDictation()
     this.alive = false
+    this.unNick?.()
     clearInterval(this.poll)
     document.removeEventListener('visibilitychange', this.onVis)
     document.removeEventListener('keydown', this.onKey)
@@ -278,6 +295,10 @@ class Chat {
     this.rec?.cancel()
     this.calls?.hangup?.()
     this.calls?.destroy()
+    clearTimeout(this.bannerT)
+    this.gcalls?.hangup?.()
+    this.gcalls?.destroy()
+    this.goverlay?.hide()
     this.overlay?.hide()
   }
 
@@ -305,6 +326,41 @@ class Chat {
     if (!peerId) return
     if (!this.calls) return toast('Calls are not supported in this browser.', 'error')
     try { await this.calls.start(peerId, kind) } catch (e) { toast(friendlyError(e), 'error') }
+  }
+  // one tap in a direct chat calls the person, in a group chat it starts (or joins) a group call
+  async callRoom(kind) {
+    const r = this.room()
+    if (!r || r.notes_owner) return
+    if (r.is_direct) return this.callPeer(this.peerOf(r), kind)
+    if (!this.gcalls) return toast('Calls are not supported in this browser.', 'error')
+    try { await this.gcalls.start(r.id, kind) } catch (e) { toast(friendlyError(e), 'error') }
+  }
+  async startGroupCall(roomId, kind) {
+    if (!this.gcalls) return toast('Calls are not supported in this browser.', 'error')
+    try { await this.gcalls.start(roomId, kind) } catch (e) { toast(friendlyError(e), 'error') }
+  }
+  async joinGroupCall(callId) {
+    if (!this.gcalls) return
+    try { await this.gcalls.join(callId) } catch (e) { toast(friendlyError(e), 'error') }
+  }
+  onGroupCallEnded({ reason, message }) {
+    if (message) toast(message, reason === 'error' ? 'error' : 'info')
+    else if (reason === 'ended') toast('Call ended')
+    if (this.tab === 'calls' && this.alive) renderCalls(this.callsView, this)
+    this.refreshCallBannerSoon()
+  }
+  refreshCallBannerSoon() { clearTimeout(this.bannerT); this.bannerT = setTimeout(() => this.refreshCallBanner(), 400) }
+  // "Group call in progress - Join" strip, so people who missed the ring can still jump in
+  async refreshCallBanner() {
+    const r = this.room()
+    if (!this.alive || !this.gcalls || !r || r.is_direct || r.notes_owner) { if (this.callBanner) this.callBanner.hidden = true; return }
+    let call = null
+    try { call = await this.gcalls.api.activeForRoom(r.id) } catch { /* ignore */ }
+    if (!this.alive || this.currentId !== r.id) return
+    if (!call || this.gcalls.s.call?.id === call.id) { this.callBanner.hidden = true; return }
+    clear(this.callBanner).append(h('span', { class: 'cb-text' }, icon(call.kind === 'video' ? 'video' : 'phone', 16), ` Group ${call.kind} call in progress`),
+      h('button', { class: 'btn primary small', type: 'button', onclick: () => this.joinGroupCall(call.id) }, 'Join'))
+    this.callBanner.hidden = false
   }
   onCallEnded({ reason, message }) {
     if (message && reason !== 'ended') toast(message, reason === 'error' ? 'error' : 'info')
@@ -361,7 +417,9 @@ class Chat {
   }
 
   /* ---------- people, avatars, status ---------- */
-  nameOf(id) { return this.people.get(id)?.username || 'Former member' }
+  usernameOf(id) { return this.people.get(id)?.username || 'Former member' }
+  // What I see for this person: my nickname for them if I set one, otherwise their username.
+  nameOf(id) { return (id !== this.me.id && nickOf(id)) || this.usernameOf(id) }
 
   // A round avatar: the first letter now, the picture as soon as its temporary link is ready.
   avatar(id, size = '') {
@@ -428,7 +486,7 @@ class Chat {
   title(r) {
     if (r.notes_owner) return 'Notes to myself'
     if (!r.is_direct) return r.name
-    return this.people.get(this.peerOf(r))?.username || 'Direct chat'
+    return this.nameOf(this.peerOf(r)) === 'Former member' ? 'Direct chat' : this.nameOf(this.peerOf(r))
   }
   myRole(r) { return r?.participants.find((p) => p.profile_id === this.me.id)?.role }
 
@@ -502,10 +560,11 @@ class Chat {
     if (!this.typers.size) {
       this.paneSub.textContent = r.notes_owner ? 'Only you can see this chat'
         : r.is_direct
-        ? (describeStatus(this.status.get(peer)) || 'Direct chat')
+        ? [nickOf(peer) && `@${this.usernameOf(peer)}`, describeStatus(this.status.get(peer)) || (nickOf(peer) ? '' : 'Direct chat')].filter(Boolean).join(' · ')
         : r.participants.map((p) => this.nameOf(p.profile_id)).join(', ')
     }
-    this.voiceCallBtn.hidden = this.videoCallBtn.hidden = !r.is_direct || !this.calls
+    this.voiceCallBtn.hidden = this.videoCallBtn.hidden = !!r.notes_owner || !this.calls
+    this.refreshCallBannerSoon()
     const fresh = this.roomAvatar(r, 'sm')
     this.paneAvatar.replaceWith(fresh); this.paneAvatar = fresh
     if (peer) { fresh.classList.add('clickable'); fresh.onclick = () => this.showProfile(peer) }
@@ -723,6 +782,7 @@ class Chat {
       h('button', { class: 'linkish', type: 'button', onclick: () => this.retrySend(m) }, 'Retry'),
       h('button', { class: 'linkish', type: 'button', onclick: () => this.dropPending(m) }, 'Delete')) : null
     const bubble = h('div', { class: `bubble${m._pending ? ' pending' : ''}${m._failed ? ' failed' : ''}` },
+        m.status_label && h('div', { class: 'status-ref' }, icon('status', 14), h('span', {}, own ? `Your reply to a status · ${m.status_label.replace(/^Status:? ?/, '') || 'status'}` : `Replied to your status · ${m.status_label.replace(/^Status:? ?/, '') || ''}`)),
         this.quoteEl(m),
         !grouped && !own && !dm && h('div', { class: `meta nm-${colourOf(m.sender_id)}` }, h('button', { class: 'linkish plain', type: 'button', onclick: () => this.showProfile(m.sender_id) }, this.nameOf(m.sender_id))),
         body,
@@ -1127,9 +1187,10 @@ class Chat {
     const big = this.avatar(id, 'xl')
     const body = [
       h('div', { class: 'profile-card' }, big,
-        h('h3', {}, p.username), st && h('p', { class: 'small' }, st),
+        h('h3', {}, this.nameOf(id)), id !== this.me.id && nickOf(id) && h('p', { class: 'small' }, `@${p.username}`), st && h('p', { class: 'small' }, st),
+        id !== this.me.id && nickFor(id) && h('p', { class: 'nick-from' }, icon('heart', 14), ` ${p.username} calls you "${nickFor(id)}"`),
         h('p', { class: 'bio' }, p.bio || 'No bio yet.')),
-      id !== this.me.id && personalSection(id, p.username),
+      id !== this.me.id && personalSection(id, this.nameOf(id), { username: p.username, onNick: () => { this.renderRooms(); this.renderHeader(); this.renderMessages(false); d?.close(); this.showProfile(id) } }),
     ]
     const actions = [{ label: 'Close' }]
     let d

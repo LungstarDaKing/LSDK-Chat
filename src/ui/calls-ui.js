@@ -2,6 +2,7 @@ import { h, clear, toast, friendlyError } from '../lib/dom.js'
 import { loadCallLog, clearCallLog } from '../lib/calls.js'
 import { startRingtone, stopRingtone } from '../lib/ringtones.js'
 import { fmtDuration } from '../lib/voice.js'
+import { loadGroupCallLog, clearGroupCallLog } from '../lib/group-calls.js'
 import { icon } from './icons.js'
 
 // Full-screen call window driven by CallManager state.
@@ -78,17 +79,21 @@ const fmtWhen = (iso) => {
 
 export async function renderCalls(box, ctx) {
   clear(box).append(h('p', { class: 'hint pad' }, 'Loading…'))
-  let rows
+  let rows, groupRows = []
   try { rows = await loadCallLog() } catch (e) { return clear(box).append(h('p', { class: 'hint pad' }, friendlyError(e))) }
-  await ctx.ensurePeople(rows.flatMap((r) => [r.caller_id, r.callee_id]))
+  try { groupRows = await loadGroupCallLog() } catch { /* group calls are optional until update-v0.9-group-calls.sql has been run */ }
+  await ctx.ensurePeople([...rows.flatMap((r) => [r.caller_id, r.callee_id]), ...groupRows.map((g) => g.group_calls.started_by)])
   clear(box)
-  if (!rows.length) {
+  if (!rows.length && !groupRows.length) {
     box.append(h('p', { class: 'hint pad' }, 'No calls yet. Open a chat and tap the phone or camera button. You can call someone once you have both sent each other a message.'))
     return
   }
   box.append(h('div', { class: 'list-title row-between' }, 'Recent calls',
-    h('button', { class: 'linkish', type: 'button', onclick: async () => { await clearCallLog(); renderCalls(box, ctx) } }, 'Clear history')))
-  for (const c of rows) {
+    h('button', { class: 'linkish', type: 'button', onclick: async () => { await clearCallLog(); await clearGroupCallLog(); renderCalls(box, ctx) } }, 'Clear history')))
+  const items = [...rows.map((c) => ({ t: c.created_at, c })), ...groupRows.map((g) => ({ t: g.group_calls.created_at, g }))]
+    .sort((a, b) => new Date(b.t) - new Date(a.t))
+  for (const { c, g } of items) {
+    if (g) { box.append(groupRow(g, ctx)); continue }
     const out = c.caller_id === ctx.me.id, peer = out ? c.callee_id : c.caller_id
     const missed = !out && ['missed', 'declined'].includes(c.status) || (!out && c.status === 'ringing')
     const state = c.status === 'ended' && c.answered_at && c.ended_at ? fmtDuration(new Date(c.ended_at) - new Date(c.answered_at))
@@ -102,4 +107,20 @@ export async function renderCalls(box, ctx) {
         onclick: () => ctx.callPeer(peer, c.kind) }, icon(ICON[c.kind], 20))))
   }
   ctx.hydrateAvatars(box)
+}
+
+function groupRow(g, ctx) {
+  const call = g.group_calls, mine = call.started_by === ctx.me.id
+  const name = call.rooms?.name || 'Group'
+  const missed = ['missed', 'ringing'].includes(g.state) && !mine
+  const state = g.state === 'joined' || g.state === 'left'
+    ? (g.joined_at && g.left_at ? fmtDuration(new Date(g.left_at) - new Date(g.joined_at)) : 'In call')
+    : g.state === 'declined' ? 'Declined' : g.state === 'missed' ? 'Missed' : g.state === 'ringing' ? 'Ringing' : 'Ended'
+  return h('div', { class: 'row-item' },
+    h('div', { class: 'row-main' }, h('span', { class: 'avatar md', 'aria-hidden': 'true' }, name.slice(0, 1).toUpperCase()),
+      h('span', { class: 'row-meta' },
+        h('span', { class: `row-name${missed ? ' missed' : ''}` }, name),
+        h('span', { class: 'row-sub' }, h('span', { class: `dir ${mine ? 'out' : 'in'}` }, icon(ICON[call.kind], 14)), ` Group · ${mine ? 'Outgoing' : 'Incoming'} · ${state} · ${fmtWhen(call.created_at)}`))),
+    h('button', { class: 'btn icon round', type: 'button', title: `Call ${name} again`, 'aria-label': `Call ${name} again`,
+      onclick: () => ctx.startGroupCall?.(call.room_id, call.kind) }, icon(ICON[call.kind], 20)))
 }

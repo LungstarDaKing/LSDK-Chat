@@ -3,6 +3,7 @@
 import { supabase } from '../lib/supabase.js'
 import { h, clear, toast, confirmDialog, debounce, friendlyError } from '../lib/dom.js'
 import { state, go } from '../lib/state.js'
+import { nickOf } from '../lib/nicknames.js'
 import { fmtSize, signedUrls } from '../lib/media.js'
 import { searchMessages, listSaved, removeSaved, listReminders, removeReminder, listScheduled, removeScheduled, previewText } from '../lib/tools.js'
 
@@ -16,7 +17,7 @@ async function roomNames() {
   const me = state.session.user.id, map = new Map()
   const { data } = await supabase.from('rooms').select('id, name, is_direct, notes_owner, participants(profile_id, profiles(username))')
   for (const r of data || []) {
-    map.set(r.id, r.notes_owner ? 'Notes to myself' : r.is_direct ? (r.participants.find((p) => p.profile_id !== me)?.profiles?.username || 'Direct chat') : r.name)
+    map.set(r.id, r.notes_owner ? 'Notes to myself' : r.is_direct ? (nickOf(r.participants.find((p) => p.profile_id !== me)?.profile_id) || r.participants.find((p) => p.profile_id !== me)?.profiles?.username || 'Direct chat') : r.name)
   }
   return map
 }

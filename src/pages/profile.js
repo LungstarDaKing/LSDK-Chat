@@ -1,3 +1,4 @@
+import { editImage } from '../ui/image-editor.js'
 import { supabase } from '../lib/supabase.js'
 import { h, clear, toast, dialog, friendlyError } from '../lib/dom.js'
 import { CONFIG } from '../config.js'
@@ -86,7 +87,9 @@ export async function renderProfile(root) {
   }
   const file = h('input', { type: 'file', accept: 'image/jpeg,image/png,image/webp', hidden: true, 'aria-label': 'Choose a profile picture',
     onchange: async () => {
-      const f = file.files[0]; file.value = ''
+      const raw = file.files[0]; file.value = ''
+      if (!raw) return
+      const f = await editImage(raw, { title: 'Profile picture', aspect: 'square', aspects: ['square', 'portrait'], outMax: 800, confirm: 'Use as profile picture' })
       if (!f) return
       setMsg(picMsg, 'Uploading…', 'success')
       try {

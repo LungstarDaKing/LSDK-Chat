@@ -1,5 +1,6 @@
 import { supabase } from '../lib/supabase.js'
 import { h, clear, toast, friendlyError } from '../lib/dom.js'
+import { editImage } from '../ui/image-editor.js'
 import { BACKGROUNDS, THEMES, getTheme, setTheme, getBackgroundId, setBackground, getCustomImage, setCustomImage, removeCustomImage, getDim, setDim, backgroundCss } from '../lib/theme.js'
 import { soundEnabled, setSoundEnabled, likeSoundEnabled, setLikeSoundEnabled } from '../lib/sound.js'
 import { STOCK, MAX_CUSTOM, getPrefs, setDefaultTone, listCustom, addCustomTone, removeCustomTone, previewTone, stopRingtone } from '../lib/ringtones.js'
@@ -112,7 +113,7 @@ export async function renderSettings(root) {
     onchange: async () => {
       const f = pic.files[0]; pic.value = ''
       if (!f) return
-      try { await setCustomImage(f); drawGrid(); paint(); flash('Background set') } catch (e) { flash(e.message, 'error') }
+      try { const edited = await editImage(f, { title: 'Chat background' }); if (!edited) return; await setCustomImage(edited); drawGrid(); paint(); flash('Background set') } catch (e) { flash(e.message, 'error') }
     } })
   drawGrid(); paint()
 
