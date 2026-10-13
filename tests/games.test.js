@@ -63,3 +63,33 @@ describe('solo games', () => {
     const safe = newStickman(() => .5); safe.obs.push({ x: 55, w: 20, h: 40 }); safe.y = 60; safe.jumpReq = false; stickmanStep(safe, .001); expect(safe.dead).toBe(false)
   })
 })
+
+import { dartScore, dartsPlay, DART_START } from '../src/lib/games.js'
+describe('darts', () => {
+  const dg = (s1 = 301, s2 = 301, turn = A) => ({ id: 'd', kind: 'darts', p1: A, p2: B, status: 'active', turn, version: 0, state: { s1, s2, turns: [] } })
+  it('scores the board: bull, trebles, doubles, segments, misses', () => {
+    expect(dartScore(0, 0).pts).toBe(50)
+    expect(dartScore(0, -0.07).pts).toBe(25)
+    expect(dartScore(0, -0.6)).toMatchObject({ pts: 60, label: 'T20' })            // straight up is 20
+    expect(dartScore(0, -0.98)).toMatchObject({ pts: 40, label: 'D20' })
+    expect(dartScore(0, -0.8)).toMatchObject({ pts: 20, label: '20' })
+    expect(dartScore(0.6, 0)).toMatchObject({ pts: 18, label: 'T6' })              // straight right is 6
+    expect(dartScore(0, 0.6).label).toBe('T3')                                      // straight down is 3
+    expect(dartScore(-0.6, 0).label).toBe('T11')                                    // straight left is 11
+    expect(dartScore(0.9, 0.9).pts).toBe(0)
+  })
+  it('takes a turn off the right player and passes it on', () => {
+    const r = dartsPlay(dg(), A, [{ pts: 60, label: 'T20' }, { pts: 20, label: '20' }, { pts: 5, label: '5' }])
+    expect(r.state.s1).toBe(DART_START - 85); expect(r.state.s2).toBe(301); expect(r.status).toBe('active')
+    expect(dartsPlay(dg(), B, [{ pts: 1, label: '1' }])).toBe(null)                // not B's turn
+    expect(dartsPlay(dg(), A, [{ pts: 1, label: '1' }])).toBe(null)                 // a turn is three darts
+  })
+  it('busts when going past zero and wins on exactly zero', () => {
+    const bust = dartsPlay(dg(30), A, [{ pts: 20, label: '20' }, { pts: 20, label: '20' }])
+    expect(bust.state.s1).toBe(30); expect(bust.state.turns[0].bust).toBe(true); expect(bust.status).toBe('active')
+    const win = dartsPlay(dg(40), A, [{ pts: 40, label: 'D20' }])
+    expect(win).toMatchObject({ status: 'done', winner: A }); expect(win.state.s1).toBe(0)
+    const winB = dartsPlay(dg(301, 20, B), B, [{ pts: 10, label: '10' }, { pts: 10, label: '10' }])
+    expect(winB).toMatchObject({ status: 'done', winner: B })
+  })
+})

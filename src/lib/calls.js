@@ -13,6 +13,24 @@ export function iceServers() {
   return [...DEFAULT_ICE, ...extra]
 }
 
+/* ---------- relay (TURN) credentials: lets calls connect on phone networks and strict firewalls ---------- */
+let iceCache = null
+export async function loadIceServers() {
+  const base = iceServers()
+  if (!CONFIG.turnUrl) return base
+  if (iceCache && Date.now() - iceCache.at < 20 * 3600 * 1000) return iceCache.servers
+  try {
+    const ctl = new AbortController()
+    const t = setTimeout(() => ctl.abort(), 4000)
+    const res = await fetch(CONFIG.turnUrl, { signal: ctl.signal })
+    clearTimeout(t)
+    const d = await res.json()
+    const extra = [].concat(d?.iceServers || []).filter((s) => s && s.urls)
+    if (extra.length) { iceCache = { at: Date.now(), servers: [...base, ...extra] }; return iceCache.servers }
+  } catch { /* the relay is optional: fall back to the normal servers */ }
+  return base
+}
+
 export function supabaseCallApi(meId) {
   return {
     start: async (callee, kind) => { const { data, error } = await supabase.rpc('start_call', { p_callee: callee, p_kind: kind }); if (error) throw error; return data },
@@ -45,23 +63,43 @@ export const callsSupported = () => !!(window.RTCPeerConnection && navigator.med
 // Screen sharing needs getDisplayMedia, which most phone browsers do not offer.
 export const screenShareSupported = () => !!navigator.mediaDevices?.getDisplayMedia
 
+// Asks the browser for the screen, with sound if the browser and the chosen source can provide it
+// (Chrome / Edge on a computer: a browser tab, or the whole screen on Windows).
+// Returns { stream, hasAudio }. The sound is not processed like a microphone (no echo cancelling, no noise
+// suppression), because it is music or video, and the browser is told not to also play it on the sharer's speakers
+// and not to include the call's own sound, so the other people do not hear themselves.
+export async function captureScreen(getDisplay) {
+  const audio = { echoCancellation: false, noiseSuppression: false, autoGainControl: false, suppressLocalAudioPlayback: true, restrictOwnAudio: true }
+  let stream
+  try { stream = await getDisplay({ video: { frameRate: { ideal: 15, max: 30 } }, audio, systemAudio: 'include', surfaceSwitching: 'include' }) }
+  catch (e) {
+    if (e?.name === 'NotAllowedError' || e?.name === 'AbortError') throw e
+    stream = await getDisplay({ video: true, audio: true })     // an older browser that dislikes the extra options
+  }
+  for (const t of stream.getVideoTracks()) { try { t.contentHint = 'detail' } catch { /* optional */ } }
+  return { stream, hasAudio: stream.getAudioTracks().length > 0 }
+}
+export const NO_SCREEN_SOUND = 'Sharing without sound. For sound, pick a Chrome tab (or the whole screen on Windows) and tick "Share audio". Firefox, Safari and phones cannot share sound.'
+
 const mediaError = (e) => new Error(e?.name === 'NotAllowedError' ? 'Microphone/camera access was blocked. Allow it in your browser\'s address bar and try again.'
   : e?.name === 'NotFoundError' ? 'No microphone or camera was found.' : 'Could not start the microphone/camera.')
 
 // phases: idle | outgoing | incoming | connecting | active
 export class CallManager {
-  constructor({ api, meId, onChange, onEnded, rtc = {} }) {
+  constructor({ api, meId, onChange, onEnded, onNotice, rtc = {} }) {
+    this.onNotice = onNotice
     this.api = api; this.meId = meId; this.onChange = onChange; this.onEnded = onEnded
     this.PC = rtc.RTCPeerConnection || window.RTCPeerConnection
     this.getMedia = rtc.getUserMedia || ((c) => navigator.mediaDevices.getUserMedia(c))
     this.getScreen = rtc.getDisplayMedia || (navigator.mediaDevices?.getDisplayMedia ? (c) => navigator.mediaDevices.getDisplayMedia(c) : null)
+    this.fixedIce = !!rtc.iceServers
     this.ice = rtc.iceServers || iceServers()
     this.s = this.blank()
     this.buffer = []
     this.unlisten = api.listen((c) => this.onCallRow(c), (sig) => this.onSignal(sig))
     this.poll = setInterval(() => this.checkRinging(), 8000)
   }
-  blank() { return { phase: 'idle', call: null, peerId: null, kind: null, muted: false, camOff: false, local: null, remote: null, remoteCam: false, screen: null, remoteScreen: null, error: null, startedAt: null } }
+  blank() { return { phase: 'idle', call: null, peerId: null, kind: null, muted: false, camOff: false, local: null, remote: null, remoteCam: false, screen: null, screenAudio: false, remoteScreen: null, error: null, startedAt: null } }
   set(patch) { this.s = { ...this.s, ...patch }; this.onChange?.(this.s) }
   destroy() { clearInterval(this.poll); this.unlisten?.(); this.cleanup(); }
 
@@ -71,6 +109,7 @@ export class CallManager {
     this.set({ ...this.blank(), phase: 'outgoing', peerId, kind })
     try {
       const local = await this.media(kind)
+      await this.prepIce()
       const id = await this.api.start(peerId, kind)
       const call = await this.api.getCall(id)
       if (!call) throw new Error('Could not start the call.')
@@ -79,6 +118,8 @@ export class CallManager {
       this.ringTimeout = setTimeout(() => { if (this.s.phase === 'outgoing') this.hangup() }, RING_MS)
     } catch (e) { this.cleanup(); this.set({ ...this.blank(), error: e.message }); this.finish('error', e.message); throw e }
   }
+
+  async prepIce() { if (!this.fixedIce) this.ice = await loadIceServers() }
 
   async media(kind) {
     try { return await this.getMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: kind === 'video' ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false }) }
@@ -96,6 +137,7 @@ export class CallManager {
     if (phase !== 'incoming') return
     try {
       const local = await this.media(kind)
+      await this.prepIce()
       await this.api.answer(call.id)
       this.set({ phase: 'connecting', local })
       this.makePc(local)
@@ -163,18 +205,18 @@ export class CallManager {
     const pc = new this.PC({ iceServers: this.ice })
     this.pc = pc; this.cands = []; this.ready = false; this.makingOffer = false; this.ignoreOffer = false
     this.polite = this.s.call.callee_id === this.meId
-    this.mainId = null; this.screenId = null; this.screenSender = null; this.dc = null
+    this.mainId = null; this.screenId = null; this.screenSenders = []; this.dc = null
     const callId = this.s.call.id
     for (const t of local.getTracks()) pc.addTrack(t, local)
     const remote = new MediaStream()
     pc.ontrack = (e) => {
       const st = e.streams[0]
       if (e.track.kind === 'audio' && !this.mainId) this.mainId = st?.id || 'main'
-      if (e.track.kind === 'video' && st && (st.id === this.screenId || (this.mainId && st.id !== this.mainId))) {
+      // anything that is not the person's own camera/microphone stream is their shared screen (picture and sound)
+      if (st && (st.id === this.screenId || (this.mainId && st.id !== this.mainId))) {
         this.screenId = st.id
-        const gone = () => { if (this.s.remoteScreen === st) this.set({ remoteScreen: null }) }
-        st.onremovetrack = () => { if (!st.getTracks().length) gone() }
-        e.track.onended = gone
+        const gone = () => { if (this.s.remoteScreen === st && !st.getTracks().some((t) => t.readyState === 'live')) this.set({ remoteScreen: null }) }
+        st.onremovetrack = gone; e.track.onended = gone
         this.set({ remoteScreen: st }); return
       }
       remote.addTrack(e.track)
@@ -244,25 +286,27 @@ export class CallManager {
 
   async startScreenShare() {
     if (!this.canChange || this.s.screen) return
-    if (!this.getScreen) throw new Error('Your browser cannot share its screen. Try Chrome, Edge or Firefox on a computer.')
-    let stream
-    try { stream = await this.getScreen({ video: true, audio: false }) }
+    if (!this.getScreen) throw new Error('This browser cannot share its screen. Try Chrome or Edge on a computer.')
+    let cap
+    try { cap = await captureScreen(this.getScreen) }
     catch (e) { if (e?.name === 'NotAllowedError' || e?.name === 'AbortError') return; throw new Error('Could not start screen sharing.') }
+    const { stream, hasAudio } = cap
     if (!this.canChange) { stream.getTracks().forEach((t) => t.stop()); return }
-    const track = stream.getVideoTracks()[0]
-    track.onended = () => this.stopScreenShare()    // the browser's own "Stop sharing" button
+    const vt = stream.getVideoTracks()[0]
+    vt.onended = () => this.stopScreenShare()    // the browser's own "Stop sharing" button
     this.tell({ t: 'screen', on: true, id: stream.id })
-    this.screenSender = this.pc.addTrack(track, stream)
-    this.set({ screen: stream })
+    this.screenSenders = stream.getTracks().map((t) => this.pc.addTrack(t, stream))
+    this.set({ screen: stream, screenAudio: hasAudio })
+    if (!hasAudio) this.onNotice?.(NO_SCREEN_SOUND)
   }
   stopScreenShare() {
     const st = this.s.screen
     if (!st) return
     st.getTracks().forEach((t) => { t.onended = null; t.stop() })
-    if (this.pc && this.screenSender) { try { this.pc.removeTrack(this.screenSender) } catch { /* ignore */ } }
-    this.screenSender = null
+    if (this.pc) for (const sd of this.screenSenders) { try { this.pc.removeTrack(sd) } catch { /* ignore */ } }
+    this.screenSenders = []
     this.tell({ t: 'screen', on: false })
-    this.set({ screen: null })
+    this.set({ screen: null, screenAudio: false })
   }
 
   toggleMute() {

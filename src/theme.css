@@ -447,3 +447,20 @@ html[data-contrast='high'] .rail { background: #000; }
 .keys { display: grid; grid-template-columns: repeat(7, 1fr); gap: .3rem; margin-top: .6rem; }
 .key { padding: .5rem 0; border-radius: 8px; border: 0; background: var(--surface-2); color: var(--text); font-weight: 700; cursor: pointer; } .key:disabled { opacity: .45; cursor: default; } .key.good { background: #1fb86866; } .key.bad { background: #e5334b66; }
 .tq-log { padding-left: 1.2rem; max-height: 40vh; overflow: auto; } .tq-guess { color: #b87800; } .tq-a.Yes { color: #1fb868; } .tq-a.No { color: #e5334b; } .tq-a.Sometimes { color: #F5B83D; }
+
+/* ---- v0.12: screen sound, group screen share ---- */
+.sound-chip { position: absolute; bottom: calc(7.5rem + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); z-index: 5; background: #F5B83D; color: #15102B; border-radius: 999px; display: inline-flex; gap: .3rem; align-items: center; }
+.sound-chip[hidden] { display: none; }
+.gc-overlay .gc-stage { position: relative; flex: 1 1 auto; min-height: 0; width: 100%; background: #000; border-radius: 14px; overflow: hidden; margin-bottom: .5rem; }
+.gc-overlay .gc-stage[hidden] { display: none; }
+.gc-stage-video { width: 100%; height: 100%; object-fit: contain; display: block; background: #000; }
+.gc-stage-label { position: absolute; left: .7rem; top: .6rem; padding: .2rem .6rem; border-radius: 999px; background: #000a; color: #fff; font-size: .85rem; }
+.gc-overlay.has-stage .gc-grid { flex: 0 0 auto; display: flex; gap: .4rem; overflow-x: auto; max-height: 110px; }
+.gc-overlay.has-stage .gc-tile { flex: 0 0 120px; height: 90px; min-height: 0; }
+
+/* ---- v0.12: darts ---- */
+.dartboard { width: 100%; max-width: 360px; display: block; margin: .3rem auto; touch-action: manipulation; border-radius: 50%; }
+.dart-scores { display: flex; gap: .6rem; justify-content: center; } .dart-scores > div { flex: 1; max-width: 160px; text-align: center; padding: .4rem; border-radius: 12px; background: var(--surface-2); }
+.dart-scores > div.on { outline: 2px solid #F5B83D; } .dart-scores b { display: block; font-size: 1.8rem; font-family: var(--font-display, inherit); }
+.dart-tally { text-align: center; font-weight: 600; min-height: 1.4em; margin: .2rem 0; } .dart-throw { display: block; margin: .3rem auto; min-width: 140px; }
+.dart-log { padding-left: 1.1rem; margin: .5rem 0 0; }

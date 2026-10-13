@@ -10,7 +10,7 @@
 //   * Networks that block direct connections use the TURN relay (see CONFIG.turnUrl).
 import { supabase } from './supabase.js'
 import { CONFIG } from '../config.js'
-import { iceServers as baseIceServers } from './calls.js'
+import { loadIceServers, captureScreen, NO_SCREEN_SOUND } from './calls.js'
 
 export const MAX_GROUP = 6
 const RING_MS = 60000
@@ -19,23 +19,8 @@ const POLL_MS = 6000
 const CONNECT_MS = 25000
 const MAX_RETRIES = 3
 
-/* ---------- relay (TURN) credentials ---------- */
-let iceCache = null
-export async function loadIceServers() {
-  const base = baseIceServers()
-  if (!CONFIG.turnUrl) return base
-  if (iceCache && Date.now() - iceCache.at < 20 * 3600 * 1000) return iceCache.servers
-  try {
-    const ctl = new AbortController()
-    const t = setTimeout(() => ctl.abort(), 4000)
-    const res = await fetch(CONFIG.turnUrl, { signal: ctl.signal })
-    clearTimeout(t)
-    const d = await res.json()
-    const extra = [].concat(d?.iceServers || []).filter((s) => s && s.urls)
-    if (extra.length) { iceCache = { at: Date.now(), servers: [...base, ...extra] }; return iceCache.servers }
-  } catch { /* relay is optional: fall back to the normal servers */ }
-  return base
-}
+/* ---------- relay (TURN) credentials: shared with 1-to-1 calls (see calls.js) ---------- */
+export { loadIceServers }
 
 /* ---------- database access ---------- */
 const need = (r) => { if (r.error) throw r.error; return r.data }
@@ -86,12 +71,14 @@ const mediaError = (e) => new Error(e?.name === 'NotAllowedError' ? 'Microphone/
 
 // phases: idle | incoming | joining | active
 export class GroupCallManager {
-  constructor({ api, meId, onChange, onEnded, onFeed, isBusy, rtc = {} }) {
+  constructor({ api, meId, onChange, onEnded, onFeed, onNotice, isBusy, rtc = {} }) {
+    this.onNotice = onNotice
     this.api = api; this.meId = meId; this.onChange = onChange; this.onEnded = onEnded; this.onFeed = onFeed
     this.isBusy = isBusy || (() => false)
     this.PC = rtc.RTCPeerConnection || window.RTCPeerConnection
     this.getMedia = rtc.getUserMedia || ((c) => navigator.mediaDevices.getUserMedia(c))
     this.getIce = rtc.getIceServers || loadIceServers
+    this.getScreen = rtc.getDisplayMedia || (navigator.mediaDevices?.getDisplayMedia ? (c) => navigator.mediaDevices.getDisplayMedia(c) : null)
     this.s = this.blank()
     this.rec = new Map()
     this.buffer = []; this.seen = new Set()
@@ -101,7 +88,7 @@ export class GroupCallManager {
     this.onVis = () => { if (document.visibilityState === 'visible' && this.entered) this.ping() }
     document.addEventListener('visibilitychange', this.onVis)
   }
-  blank() { return { phase: 'idle', call: null, kind: null, roomId: null, starterId: null, members: [], peers: {}, local: null, muted: false, camOff: false, error: null, startedAt: null } }
+  blank() { return { phase: 'idle', call: null, kind: null, roomId: null, starterId: null, members: [], peers: {}, local: null, screen: null, screenAudio: false, muted: false, camOff: false, error: null, startedAt: null } }
   set(patch) { this.s = { ...this.s, ...patch }; this.onChange?.(this.s) }
   busy() { return this.s.phase !== 'idle' }
   destroy() { clearInterval(this.poll); document.removeEventListener('visibilitychange', this.onVis); this.unlisten?.(); this.teardown() }
@@ -277,7 +264,7 @@ export class GroupCallManager {
 
   /* ----- one connection per person ----- */
   ensurePeer(id) {
-    const rec = { id, pc: null, localSid: null, remoteSid: null, cands: [], stream: null, state: 'connecting', retries: 0, timer: null }
+    const rec = { id, pc: null, localSid: null, remoteSid: null, cands: [], stream: null, screen: null, state: 'connecting', retries: 0, timer: null }
     this.rec.set(id, rec)
     this.arm(rec)
     if (this.meId < id) this.initiate(rec)       // smaller id always makes the offer
@@ -293,7 +280,7 @@ export class GroupCallManager {
   resetPc(rec) {
     clearTimeout(rec.timer); clearTimeout(rec.dropT)
     try { rec.pc?.close() } catch { /* ignore */ }
-    rec.pc = null; rec.remoteSid = null; rec.stream = null; rec.state = 'connecting'
+    rec.pc = null; rec.remoteSid = null; rec.stream = null; rec.screen = null; rec.mainId = null; rec.screenId = null; rec.ready = false; rec.makingOffer = false; rec.senders = []; rec.state = 'connecting'
   }
   retry(rec) {
     clearTimeout(rec.timer)
@@ -314,20 +301,43 @@ export class GroupCallManager {
     rec.pc = pc; rec.localSid = rnd(); rec.stream = new MediaStream()
     const callId = this.s.call.id, sid = rec.localSid
     const local = this.s.local
+    rec.ready = false; rec.makingOffer = false; rec.ignoreOffer = false; rec.mainId = null; rec.screenId = null; rec.screen = null; rec.senders = []
     for (const t of local?.getTracks() || []) pc.addTrack(t, local)
+    const mine = this.s.screen                                     // joined or reconnected while sharing: share with the new person too
+    if (mine) rec.senders = mine.getTracks().map((t) => pc.addTrack(t, mine))
     pc.ontrack = (e) => {
       if (rec.pc !== pc) return
-      if (e.streams?.[0]) rec.stream = e.streams[0]
+      const st = e.streams?.[0]
+      if (e.track.kind === 'audio' && !rec.mainId) rec.mainId = st?.id || 'main'
+      // anything outside the person's camera/microphone stream is their shared screen (picture and sound)
+      if (st && (st.id === rec.screenId || (rec.mainId && st.id !== rec.mainId))) {
+        rec.screenId = st.id; rec.screen = st
+        const gone = () => { if (rec.screen === st && !st.getTracks().some((t) => t.readyState === 'live')) { rec.screen = null; this.publish() } }
+        st.onremovetrack = gone; e.track.onended = gone
+        this.publish(); return
+      }
+      if (st) rec.stream = st
       else rec.stream.addTrack(e.track)
+      if (e.track.kind === 'video' && this.s.kind !== 'video') this.set({ kind: 'video' })
       e.track.onmute = e.track.onunmute = () => this.publish()
       this.publish()
+    }
+    pc.onnegotiationneeded = async () => {          // a camera or screen was added or removed during the call
+      if (!rec.ready || rec.pc !== pc) return
+      try {
+        rec.makingOffer = true
+        const offer = await pc.createOffer()
+        if (pc.signalingState !== 'stable' || rec.pc !== pc) return
+        await pc.setLocalDescription(offer)
+        await this.api.signal(this.s.call.id, rec.id, 'offer', { type: offer.type, sdp: offer.sdp, sid: rec.localSid, rn: 1, scr: this.s.screen?.id || null })
+      } catch { /* the next change tries again */ } finally { rec.makingOffer = false }
     }
     pc.onicecandidate = (e) => { if (e.candidate && rec.pc === pc) this.api.signal(callId, rec.id, 'candidate', { c: e.candidate.toJSON(), sid }).catch(() => {}) }
     pc.onconnectionstatechange = () => {
       if (rec.pc !== pc) return
       const st = pc.connectionState
       if (st === 'connected') {
-        clearTimeout(rec.timer); clearTimeout(rec.dropT); rec.state = 'connected'; rec.retries = 0; this.hadPeer = true
+        clearTimeout(rec.timer); clearTimeout(rec.dropT); rec.state = 'connected'; rec.retries = 0; this.hadPeer = true; rec.ready = true
         this.capBitrate(pc); this.publish()
       } else if (st === 'disconnected') {
         clearTimeout(rec.dropT); rec.dropT = setTimeout(() => { if (rec.pc === pc && pc.connectionState !== 'connected') this.retry(rec) }, 8000)
@@ -341,7 +351,7 @@ export class GroupCallManager {
       for (const sender of pc.getSenders()) {
         if (sender.track?.kind !== 'video') continue
         const p = sender.getParameters(); if (!p.encodings?.length) p.encodings = [{}]
-        p.encodings[0].maxBitrate = 450000
+        p.encodings[0].maxBitrate = this.s.screen && sender.track === this.s.screen.getVideoTracks()[0] ? 1200000 : 450000
         sender.setParameters(p).catch(() => {})
       }
     } catch { /* optional */ }
@@ -351,7 +361,7 @@ export class GroupCallManager {
     try {
       const pc = this.createPc(rec)
       const offer = await pc.createOffer(); await pc.setLocalDescription(offer)
-      await this.api.signal(this.s.call.id, rec.id, 'offer', { type: offer.type, sdp: offer.sdp, sid: rec.localSid })
+      await this.api.signal(this.s.call.id, rec.id, 'offer', { type: offer.type, sdp: offer.sdp, sid: rec.localSid, scr: this.s.screen?.id || null })
     } catch { this.retry(rec) }
   }
 
@@ -369,10 +379,18 @@ export class GroupCallManager {
         const r = rec || this.ensureShell(sig.from_id)
         r.cands.push({ sid: p.sid, c: p.c }); await this.flush(r)
       } else if (sig.kind === 'offer') {
-        if (this.meId < sig.from_id) return                 // only the smaller id offers; stray offers are ignored
+        // a change made during the call (camera / screen) is allowed from either side; the first offer only from the smaller id
+        const isRn = !!p.rn && !!rec?.pc && rec.remoteSid === p.sid
+        if (!isRn && this.meId < sig.from_id) return
         const r = rec || this.ensurePeer(sig.from_id)
         delete r.shell
-        if (!r.pc || r.remoteSid !== p.sid) { this.resetPc(r); this.createPc(r); r.remoteSid = p.sid; this.arm(r) }
+        if (isRn) {
+          const collision = r.makingOffer || r.pc.signalingState !== 'stable'
+          r.ignoreOffer = this.meId < sig.from_id && collision        // the smaller id wins a clash, the other side gives way
+          if (r.ignoreOffer) return
+        } else if (!r.pc || r.remoteSid !== p.sid) { this.resetPc(r); this.createPc(r); r.remoteSid = p.sid; this.arm(r) }
+        r.screenId = p.scr || null
+        if (!p.scr && r.screen) { r.screen = null; this.publish() }
         await r.pc.setRemoteDescription({ type: p.type, sdp: p.sdp })
         await this.flush(r)
         const answer = await r.pc.createAnswer(); await r.pc.setLocalDescription(answer)
@@ -412,10 +430,45 @@ export class GroupCallManager {
     this.set({ camOff: off })
   }
 
+  // Voice call -> video call (or camera back on)
+  async enableVideo() {
+    if (!this.entered || this.s.phase !== 'active') return
+    const local = this.s.local
+    const existing = local.getVideoTracks()[0]
+    if (existing) { existing.enabled = true; this.set({ camOff: false, kind: 'video' }); return }
+    let cam
+    try { cam = (await this.getMedia({ video: { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 24 }, facingMode: 'user' } })).getVideoTracks()[0] }
+    catch (e) { throw mediaError(e) }
+    if (!this.entered) { cam.stop(); return }
+    local.addTrack(cam)
+    for (const r of this.rec.values()) if (r.pc) r.pc.addTrack(cam, local)
+    this.set({ camOff: false, kind: 'video', local })
+  }
+  async startScreenShare() {
+    if (!this.entered || this.s.phase !== 'active' || this.s.screen) return
+    if (!this.getScreen) throw new Error('This browser cannot share its screen. Try Chrome or Edge on a computer.')
+    let cap
+    try { cap = await captureScreen(this.getScreen) }
+    catch (e) { if (e?.name === 'NotAllowedError' || e?.name === 'AbortError') return; throw new Error('Could not start screen sharing.') }
+    const { stream, hasAudio } = cap
+    if (!this.entered) { stream.getTracks().forEach((t) => t.stop()); return }
+    stream.getVideoTracks()[0].onended = () => this.stopScreenShare()
+    this.set({ screen: stream, screenAudio: hasAudio })           // set first: the offers announce which stream is the screen
+    for (const r of this.rec.values()) if (r.pc) { r.senders = stream.getTracks().map((t) => r.pc.addTrack(t, stream)); this.capBitrate(r.pc) }
+    if (!hasAudio) this.onNotice?.(NO_SCREEN_SOUND)
+  }
+  stopScreenShare() {
+    const st = this.s.screen
+    if (!st) return
+    st.getTracks().forEach((t) => { t.onended = null; t.stop() })
+    this.set({ screen: null, screenAudio: false })
+    for (const r of this.rec.values()) { if (r.pc) for (const sd of r.senders || []) { try { r.pc.removeTrack(sd) } catch { /* ignore */ } } r.senders = [] }
+  }
+
   /* ----- state published to the screen ----- */
   publish() {
     const peers = {}
-    for (const [id, r] of this.rec) peers[id] = { state: r.state, stream: r.stream }
+    for (const [id, r] of this.rec) peers[id] = { state: r.state, stream: r.stream, screen: r.screen || null }
     this.set({ peers })
   }
 
@@ -424,6 +477,7 @@ export class GroupCallManager {
     clearInterval(this.hb); clearTimeout(this.ringTimer); clearTimeout(this.aloneT); clearTimeout(this.refreshT)
     this.aloneT = null; this.hb = null
     this.s.local?.getTracks().forEach((t) => t.stop())
+    this.s.screen?.getTracks().forEach((t) => { t.onended = null; t.stop() })
     for (const id of [...this.rec.keys()]) this.dropPeer(id)
     this.entered = false; this.buffer = []; this.seen.clear(); this.hadPeer = false
   }

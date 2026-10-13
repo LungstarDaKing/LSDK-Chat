@@ -6,6 +6,7 @@ export const VERSUS = {
   ttt: { title: 'Tic-tac-toe', blurb: 'Three in a row. Quick one.', secret: null },
   chess: { title: 'Chess', blurb: 'Full rules. The one who starts plays white.', secret: null },
   hangman: { title: 'Hangman', blurb: 'You pick a word, they guess it letter by letter.', secret: 'Type a word for them to guess (3 to 20 letters)' },
+  darts: { title: 'Darts', blurb: '301, first to exactly zero. Three darts a turn.', secret: null },
   twenty: { title: '20 Questions', blurb: 'You think of something. They have 20 yes/no questions.', secret: 'Think of a person, place or thing and type it. Only you can see it.' },
 }
 
@@ -74,4 +75,41 @@ export function resultLine(game, me, nameOf) {
   const how = game.result ? ` (${game.result})` : ''
   if (!game.winner) return `Draw${how}`
   return game.winner === me ? `You won${how}` : `${nameOf(game.winner)} won${how}`
+}
+
+/* ---------- darts (301, straight out: finish on exactly zero, going past zero is a bust) ---------- */
+export const DART_START = 301
+const BOARD = [20, 1, 18, 4, 13, 6, 10, 15, 2, 17, 3, 19, 7, 16, 8, 11, 14, 9, 12, 5]   // clockwise from the top
+export const BOARD_ORDER = BOARD
+// x, y are positions on the board in "board radius" units (0,0 is the middle, y grows downwards, 1 is the outer edge of the doubles)
+export function dartScore(x, y) {
+  const r = Math.hypot(x, y)
+  if (r <= 0.037) return { pts: 50, label: 'Bullseye', mult: 2, seg: 25 }
+  if (r <= 0.094) return { pts: 25, label: '25', mult: 1, seg: 25 }
+  if (r > 1) return { pts: 0, label: 'Miss', mult: 0, seg: 0 }
+  let ang = Math.atan2(x, -y) * 180 / Math.PI            // 0 = straight up, clockwise
+  if (ang < 0) ang += 360
+  const seg = BOARD[Math.floor(((ang + 9) % 360) / 18)]
+  const mult = r >= 0.953 ? 2 : (r >= 0.582 && r <= 0.629) ? 3 : 1
+  return { pts: seg * mult, label: mult === 3 ? `T${seg}` : mult === 2 ? `D${seg}` : String(seg), mult, seg }
+}
+// darts = up to three { pts, label }. Returns what to send, or null if it is not allowed.
+export function dartsPlay(game, me, darts) {
+  if (game.status !== 'active' || game.turn !== me || !Array.isArray(darts) || darts.length < 1 || darts.length > 3) return null
+  const first = me === game.p1
+  const before = first ? game.state.s1 : game.state.s2
+  let left = before, bust = false, thrown = 0
+  for (const d of darts) {
+    thrown++
+    if (left - d.pts < 0) { bust = true; break }
+    left -= d.pts
+    if (left === 0) break
+  }
+  if (!bust && left !== 0 && darts.length < 3) return null            // a turn is three darts unless you finish or bust
+  const after = bust ? before : left
+  const total = darts.slice(0, thrown).reduce((a, d) => a + d.pts, 0)
+  const turn = { by: first ? 1 : 2, darts: darts.slice(0, thrown).map((d) => d.label), total: bust ? 0 : total, bust }
+  const state = { s1: first ? after : game.state.s1, s2: first ? game.state.s2 : after, turns: [...(game.state.turns || []), turn].slice(-16) }
+  if (after === 0) return { state, status: 'done', winner: me, result: `Checked out in round ${Math.ceil(state.turns.length / 2)}` }
+  return { state, status: 'active', winner: null, result: null }
 }

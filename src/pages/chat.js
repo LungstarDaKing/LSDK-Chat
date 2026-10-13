@@ -260,11 +260,11 @@ class Chat {
     supabase.from('user_private').select('read_receipts').eq('id', this.me.id).maybeSingle().then(({ data }) => { if (data) this.receipts = data.read_receipts })
     if (callsSupported()) {
       this.calls = new CallManager({ api: supabaseCallApi(this.me.id), meId: this.me.id,
-        onChange: (s) => this.overlay?.update(s), onEnded: (e) => this.onCallEnded(e) })
+        onChange: (s) => this.overlay?.update(s), onEnded: (e) => this.onCallEnded(e), onNotice: (m) => toast(m) })
       this.overlay = new CallOverlay(this, this.calls)
       this.gcalls = new GroupCallManager({ api: supabaseGroupApi(this.me.id), meId: this.me.id,
         isBusy: () => this.calls.s.phase !== 'idle',
-        onChange: (s) => this.goverlay?.update(s), onEnded: (e) => this.onGroupCallEnded(e), onFeed: () => this.refreshCallBannerSoon() })
+        onChange: (s) => this.goverlay?.update(s), onEnded: (e) => this.onGroupCallEnded(e), onFeed: () => this.refreshCallBannerSoon(), onNotice: (m) => toast(m) })
       this.goverlay = new GroupCallOverlay(this, this.gcalls)
       // someone phones me one-to-one while I am in a group call: tell them I cannot answer
       const ringRow = this.calls.onCallRow.bind(this.calls)

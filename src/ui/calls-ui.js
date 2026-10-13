@@ -5,6 +5,16 @@ import { fmtDuration } from '../lib/voice.js'
 import { loadGroupCallLog, clearGroupCallLog } from '../lib/group-calls.js'
 import { icon } from './icons.js'
 
+// Plays a shared screen WITH its sound. Browsers sometimes refuse sound until the person taps; then a chip asks for the tap.
+export function playWithSound(video, chip) {
+  video.muted = false
+  Promise.resolve(video.play?.()).then(() => { if (chip) chip.hidden = true }).catch(() => {
+    video.muted = true
+    Promise.resolve(video.play?.()).catch(() => {})
+    if (chip) chip.hidden = false
+  })
+}
+
 // Full-screen call window driven by CallManager state.
 export class CallOverlay {
   constructor(ctx, mgr) {
@@ -27,12 +37,12 @@ export class CallOverlay {
     this.remote = h('video', { class: 'call-remote', autoplay: true, playsInline: true })
     this.local = h('video', { class: 'call-local', autoplay: true, playsInline: true, muted: true })
     this.local.muted = true
-    this.screenView = h('video', { class: 'call-screen', autoplay: true, playsInline: true, muted: true })
-    this.screenView.muted = true
+    this.screenView = h('video', { class: 'call-screen', autoplay: true, playsInline: true })
+    this.soundChip = h('button', { class: 'btn small sound-chip', type: 'button', hidden: true, onclick: () => playWithSound(this.screenView, this.soundChip) }, icon('volume', 16), ' Tap to hear the shared screen')
     this.sharing = h('div', { class: 'call-sharing', hidden: true })
     this.controls = h('div', { class: 'call-controls' })
     this.el = h('div', { class: 'call-overlay', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Call', tabIndex: -1 },
-      this.remote, this.screenView, this.local, this.sharing, h('div', { class: 'call-center' }, this.avatarBox, this.name, this.status), this.controls)
+      this.remote, this.screenView, this.soundChip, this.local, this.sharing, h('div', { class: 'call-center' }, this.avatarBox, this.name, this.status), this.controls)
     document.body.append(this.el)
     this.el.focus()
   }
@@ -46,9 +56,9 @@ export class CallOverlay {
     const video = s.kind === 'video' || s.remoteCam
     this.el.classList.toggle('video', active && (video || !!s.remoteScreen))
     this.el.classList.toggle('has-screen', active && !!s.remoteScreen)
-    if (this.screenView.srcObject !== (s.remoteScreen || null)) { this.screenView.srcObject = s.remoteScreen || null; if (s.remoteScreen) this.screenView.play?.().catch(() => {}) }
+    if (this.screenView.srcObject !== (s.remoteScreen || null)) { this.screenView.srcObject = s.remoteScreen || null; if (s.remoteScreen) playWithSound(this.screenView, this.soundChip); else this.soundChip.hidden = true }
     clear(this.sharing).hidden = !(active && s.screen)
-    if (active && s.screen) this.sharing.append(icon('screen', 18), h('span', {}, 'You are sharing your screen'),
+    if (active && s.screen) this.sharing.append(icon('screen', 18), h('span', {}, s.screenAudio ? 'You are sharing your screen and its sound' : 'You are sharing your screen'),
       h('button', { class: 'btn small', type: 'button', onclick: () => this.mgr.stopScreenShare() }, 'Stop'))
     if (s.local && this.local.srcObject !== s.local) this.local.srcObject = s.local
     if (s.remote && this.remote.srcObject !== s.remote) { this.remote.srcObject = s.remote; this.remote.play?.().catch(() => {}) }

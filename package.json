@@ -1,6 +1,6 @@
 {
   "name": "lsdkchat",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "private": true,
   "description": "LSDKChat - small real-time chat app (Vite + Supabase)",
   "type": "module",

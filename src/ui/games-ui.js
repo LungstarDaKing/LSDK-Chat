@@ -1,7 +1,7 @@
 import { Chess } from 'chess.js'
 import { h, clear, toast, dialog, friendlyError } from '../lib/dom.js'
 import { icon } from './icons.js'
-import { VERSUS, gameApi, tttPlay, tttWinner, twentyAsk, twentyAnswer, TWENTY_MAX, maskLetters, resultLine } from '../lib/games.js'
+import { VERSUS, gameApi, tttPlay, tttWinner, twentyAsk, twentyAnswer, TWENTY_MAX, maskLetters, resultLine, dartScore, dartsPlay, BOARD_ORDER } from '../lib/games.js'
 import { SOLO } from '../games/solo.js'
 
 const GLYPH = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' }
@@ -12,14 +12,14 @@ export class GameSession {
   constructor(ctx, game) { this.ctx = ctx; this.game = game; this.me = ctx.me.id; this.sel = null; this.secret = null; this.dlg = null }
   open() {
     this.body = h('div', { class: 'game' })
-    this.dlg = dialog({ title: VERSUS[this.game.kind].title, body: this.body, wide: true, actions: [], onClose: () => { this.dead = true; this.ctx.games?.sessionClosed(this) } })
+    this.dlg = dialog({ title: VERSUS[this.game.kind].title, body: this.body, wide: true, actions: [], onClose: () => { this.dead = true; this.stopLoop?.(); this.ctx.games?.sessionClosed(this) } })
     this.render(); this.loadSecret()
     return this
   }
   update(row) {
     if (this.dead || row.id !== this.game.id || row.version < this.game.version) return
     const wasDone = this.game.status === 'done'
-    this.game = row; this.sel = null
+    this.game = row; this.sel = null; this.dt = null
     if (!wasDone && row.status === 'done') this.loadSecret()
     this.render()
   }
@@ -43,9 +43,10 @@ export class GameSession {
   }
   render() {
     const g = this.game
+    this.stopLoop?.(); this.stopLoop = null
     clear(this.body)
     this.body.append(h('p', { class: `g-status${this.mine ? ' mine' : ''}`, 'aria-live': 'polite' }, `vs ${this.ctx.nameOf(this.other())} · `, h('b', {}, this.statusText())))
-    const view = { ttt: () => this.ttt(), chess: () => this.chess(), hangman: () => this.hangman(), twenty: () => this.twenty() }[g.kind]
+    const view = { ttt: () => this.ttt(), chess: () => this.chess(), hangman: () => this.hangman(), twenty: () => this.twenty(), darts: () => this.darts() }[g.kind]
     this.body.append(view())
     this.body.append(h('div', { class: 'g-row' }, g.status === 'active'
       ? h('button', { class: 'btn small danger', type: 'button', onclick: () => this.act(() => gameApi.resign(g.id)) }, 'Give up')
@@ -128,6 +129,69 @@ export class GameSession {
     const parts = [() => add('circle', { cx: 80, cy: 34, r: 8, fill: 'none' }), () => L(80, 42, 80, 72), () => L(80, 50, 66, 62), () => L(80, 50, 94, 62), () => L(80, 72, 68, 92), () => L(80, 72, 92, 92), () => { L(75, 31, 78, 34); L(78, 31, 75, 34); L(82, 31, 85, 34); L(85, 31, 82, 34) }]
     for (let i = 0; i < Math.min(n, parts.length); i++) parts[i]()
     return svg
+  }
+
+  /* --- darts --- */
+  darts() {
+    const g = this.game, st = g.state, first = this.me === g.p1
+    const mineLeft = first ? st.s1 : st.s2, theirsLeft = first ? st.s2 : st.s1
+    const NS = 'http://www.w3.org/2000/svg'
+    const el = (tag, a, parent) => { const e = document.createElementNS(NS, tag); for (const k in a) e.setAttribute(k, a[k]); parent?.append(e); return e }
+    const pt = (r, deg) => [(r * Math.sin(deg * Math.PI / 180) * 100).toFixed(2), (-r * Math.cos(deg * Math.PI / 180) * 100).toFixed(2)]
+    const wedge = (r1, r2, a1, a2) => { const [x1, y1] = pt(r2, a1), [x2, y2] = pt(r2, a2), [x3, y3] = pt(r1, a2), [x4, y4] = pt(r1, a1); return `M${x1} ${y1}A${r2 * 100} ${r2 * 100} 0 0 1 ${x2} ${y2}L${x3} ${y3}A${r1 * 100} ${r1 * 100} 0 0 0 ${x4} ${y4}Z` }
+    const svg = el('svg', { viewBox: '-112 -112 224 224', class: 'dartboard', role: 'img', 'aria-label': 'Dartboard. Tap Throw to release a dart where the cross is.' })
+    el('circle', { r: 110, fill: '#111' }, svg)
+    BOARD_ORDER.forEach((n, i) => {
+      const a1 = i * 18 - 9, a2 = i * 18 + 9, even = i % 2 === 0
+      const single = even ? '#1a1a1a' : '#f1e6c8', ring = even ? '#d6342f' : '#1c8c4a'
+      el('path', { d: wedge(0.094, 0.582, a1, a2), fill: single }, svg); el('path', { d: wedge(0.582, 0.629, a1, a2), fill: ring }, svg)
+      el('path', { d: wedge(0.629, 0.953, a1, a2), fill: single }, svg); el('path', { d: wedge(0.953, 1, a1, a2), fill: ring }, svg)
+      const [tx, ty] = pt(1.075, i * 18); const t = el('text', { x: tx, y: ty, 'text-anchor': 'middle', 'dominant-baseline': 'central', fill: '#fff', 'font-size': 8.5, 'font-weight': 700 }, svg); t.textContent = n
+    })
+    el('circle', { r: 9.4, fill: '#1c8c4a' }, svg); el('circle', { r: 3.7, fill: '#d6342f' }, svg)
+    const marks = el('g', {}, svg)
+    const cross = el('g', { class: 'dart-cross' }, svg); el('circle', { r: 5, fill: 'none', stroke: '#F5B83D', 'stroke-width': 1.6 }, cross); el('path', { d: 'M-9 0H-3M3 0H9M0 -9V-3M0 3V9', stroke: '#F5B83D', 'stroke-width': 1.6 }, cross)
+
+    const dt = this.dt || (this.dt = { darts: [], busy: false })
+    const mine = this.mine
+    const tally = h('p', { class: 'dart-tally', 'aria-live': 'polite' })
+    const throwBtn = h('button', { class: 'btn primary dart-throw', type: 'button', disabled: !mine || dt.busy }, 'Throw')
+    const paint = () => {
+      const labels = [0, 1, 2].map((i) => dt.darts[i]?.label || '–').join('  ·  ')
+      tally.textContent = mine ? `This turn: ${labels}${dt.note ? ' · ' + dt.note : ''}` : ''
+      throwBtn.disabled = !mine || dt.busy
+    }
+    dt.darts.forEach((d) => el('circle', { cx: d.x * 100, cy: d.y * 100, r: 2.2, fill: '#F5B83D', stroke: '#000', 'stroke-width': .8 }, marks))
+    if (mine) {
+      let raf = 0, t0 = performance.now(); const aim = { x: 0, y: 0 }
+      const speed = 1 + dt.darts.length * .18
+      const loop = (now) => {
+        const t = (now - t0) / 1000 * speed
+        aim.x = Math.sin(t * 1.7) * .92; aim.y = Math.sin(t * 2.3 + 1) * .92
+        cross.setAttribute('transform', `translate(${aim.x * 100} ${aim.y * 100})`); raf = requestAnimationFrame(loop)
+      }
+      raf = requestAnimationFrame(loop); this.stopLoop = () => cancelAnimationFrame(raf)
+      const doThrow = () => {
+        if (dt.busy || dt.darts.length >= 3) return
+        const x = aim.x + (Math.random() - .5) * .06, y = aim.y + (Math.random() - .5) * .06
+        const sc = dartScore(x, y); const d = { ...sc, x, y }
+        dt.darts.push(d); el('circle', { cx: x * 100, cy: y * 100, r: 2.2, fill: '#F5B83D', stroke: '#000', 'stroke-width': .8 }, marks)
+        const remaining = mineLeft - dt.darts.reduce((a, q) => a + q.pts, 0)
+        dt.note = remaining < 0 ? 'Bust! Over zero' : remaining === 0 ? 'Checkout!' : `${remaining} left`
+        const done = remaining <= 0 || dt.darts.length === 3
+        if (done) { dt.busy = true; this.stopLoop?.(); setTimeout(() => this.send(dartsPlay(g, this.me, dt.darts)), 1100) }
+        paint()
+      }
+      throwBtn.addEventListener('click', doThrow)
+      svg.addEventListener('pointerdown', doThrow)
+      paint()
+    }
+    const recent = (st.turns || []).slice(-6).reverse().map((t) => h('li', {}, h('b', {}, `${t.by === 1 ? this.ctx.nameOf(g.p1) : this.ctx.nameOf(g.p2)}${(t.by === 1 ? g.p1 : g.p2) === this.me ? ' (you)' : ''}: `), t.bust ? `${t.darts.join(' ')} · bust` : `${t.darts.join(' ')} = ${t.total}`))
+    return h('div', {},
+      h('div', { class: 'dart-scores' }, h('div', { class: mine ? 'me on' : 'me' }, h('span', { class: 'small' }, 'You'), h('b', {}, String(mineLeft))),
+        h('div', { class: !mine && g.status === 'active' ? 'on' : '' }, h('span', { class: 'small' }, this.ctx.nameOf(this.other())), h('b', {}, String(theirsLeft)))),
+      svg, tally, mine ? throwBtn : null,
+      recent.length ? h('ul', { class: 'small dart-log' }, recent) : h('p', { class: 'small' }, 'First to exactly 0 wins. Going past zero is a bust and the turn is lost. Tap Throw (or the board) when the cross is where you want it.'))
   }
 
   /* --- 20 questions --- */
