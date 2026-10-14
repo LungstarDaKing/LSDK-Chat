@@ -2,6 +2,7 @@ import { h, clear } from '../lib/dom.js'
 import { startRingtone, stopRingtone } from '../lib/ringtones.js'
 import { fmtDuration } from '../lib/voice.js'
 import { icon } from './icons.js'
+import { attachMini, floatVideo } from './mini-window.js'
 import { screenShareSupported } from '../lib/calls.js'
 import { playWithSound } from './calls-ui.js'
 import { toast } from '../lib/dom.js'
@@ -11,7 +12,7 @@ import { toast } from '../lib/dom.js'
 //   joining / active -> a grid with one tile per person, plus mute / camera / leave
 export class GroupCallOverlay {
   constructor(ctx, mgr) {
-    this.ctx = ctx; this.mgr = mgr; this.el = null; this.phase = 'idle'; this.timer = null; this.tiles = new Map()
+    this.ctx = ctx; this.mgr = mgr; this.el = null; this.phase = 'idle'; this.timer = null; this.tiles = new Map(); this.mini = false
   }
   roomName(s) { return this.ctx.room?.(s.roomId)?.name || 'Group' }
 
@@ -39,13 +40,25 @@ export class GroupCallOverlay {
     this.controls = h('div', { class: 'call-controls' })
     this.el = h('div', { class: 'call-overlay gc-overlay', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Group call', tabIndex: -1 },
       h('div', { class: 'gc-head' }, this.title, this.status), this.stage, this.grid, this.sharing, this.center, this.controls)
+    this.minBtn = h('button', { class: 'call-min', type: 'button', 'aria-label': 'Minimise the call and keep using the app', title: 'Minimise: keep using the app', onclick: () => this.setMini(true) }, icon('minimize', 22))
+    this.el.append(this.minBtn)
+    this.miniApi = attachMini(this.el)
+    this.el.addEventListener('dblclick', (e) => { if (this.mini && !e.target.closest('button')) this.setMini(false) })
     document.body.append(this.el)
     this.el.focus()
+  }
+  setMini(on) {
+    this.mini = on
+    this.miniApi?.set(on)
+    if (this.mgr.s) this.drawControls(this.mgr.s)
+    if (!on) this.el?.focus()
   }
 
   draw(s, first) {
     this.title.textContent = this.roomName(s)
     this.el.classList.toggle('incoming', s.phase === 'incoming')
+    if (s.phase === 'incoming' && this.mini) this.setMini(false)
+    this.minBtn.hidden = s.phase !== 'active' || this.mini
     clearInterval(this.timer)
     const others = s.members.filter((m) => m.state === 'joined' && m.profile_id !== this.ctx.me.id).length
     const total = others + (s.phase === 'active' ? 1 : 0)
@@ -145,16 +158,24 @@ export class GroupCallOverlay {
     }
     if (s.phase === 'joining') { this.controls.append(b('red hang', 'Cancel', '☎', () => this.mgr.hangup())); return }
     this.controls.append(b('', s.muted ? 'Unmute' : 'Mute', s.muted ? '🔇' : '🎤', () => this.mgr.toggleMute(), s.muted))
+    if (this.mini) { this.controls.append(b('', 'Open the call screen', '⛶', () => this.setMini(false)), b('red hang', 'Leave call', '☎', () => this.mgr.hangup())); return }
     const hasCam = !!s.local?.getVideoTracks?.().length
     if (hasCam) this.controls.append(b('', s.camOff ? 'Turn camera on' : 'Turn camera off', s.camOff ? '🚫' : '📷', () => this.mgr.toggleCamera(), s.camOff))
     else if (s.phase === 'active') this.controls.append(b('', 'Switch to video', '📷', () => this.mgr.enableVideo().catch((e) => toast(e.message, 'error'))))
     if (s.phase === 'active' && screenShareSupported()) this.controls.append(b('', s.screen ? 'Stop sharing screen' : 'Share screen', '🖥️',
       () => (s.screen ? Promise.resolve(this.mgr.stopScreenShare()) : this.mgr.startScreenShare()).catch((e) => toast(e.message, 'error')), !!s.screen))
+    if (s.phase === 'active' && document.pictureInPictureEnabled) this.controls.append(b('', 'Float the video over other apps', '🗗', () => {
+      const live = (v) => v?.srcObject?.getVideoTracks?.().some((t) => t.readyState === 'live')
+      const v = !this.stage.hidden && live(this.stageVideo) ? this.stageVideo : [...this.tiles].filter(([id]) => id !== this.ctx.me.id).map(([, t]) => t.video).find(live)
+      floatVideo(v).catch((e) => toast(e.message, 'error'))
+    }))
     this.controls.append(b('red hang', 'Leave call', '☎', () => this.mgr.hangup()))
   }
 
   hide() {
     stopRingtone(); clearInterval(this.timer)
+    this.mini = false; this.miniApi?.destroy(); this.miniApi = null
+    if (document.pictureInPictureElement) document.exitPictureInPicture?.().catch(() => {})
     for (const t of this.tiles.values()) t.video.srcObject = null
     if (this.stageVideo) this.stageVideo.srcObject = null
     this.tiles.clear()

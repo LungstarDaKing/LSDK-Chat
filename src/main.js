@@ -20,8 +20,6 @@ import { renderConsent } from './pages/consent.js'
 import { startHeartbeat, stopHeartbeat } from './lib/status.js'
 import { stopNicknames } from './lib/nicknames.js'
 import './lib/theme.js'
-import { consumeAccess, playAccessGranted } from './lib/access.js'
-import './motion.css'
 
 // Clickjacking protection (GitHub Pages cannot send X-Frame-Options / frame-ancestors).
 if (window.top !== window.self) {
@@ -34,9 +32,8 @@ const root = document.getElementById('app')
 // NOTE: never await Supabase calls inside this callback (deadlocks supabase-js); defer instead.
 supabase.auth.onAuthStateChange((event, s) => {
   state.session = s
-  if (event === 'SIGNED_IN' && consumeAccess()) playAccessGranted(CONFIG.appName)   // "Access granted" animation
   if (event === 'PASSWORD_RECOVERY') state.recovering = true
-  if (event === 'SIGNED_OUT') { state.profile = null; state.recovering = false; teardownChat(); stopHeartbeat(); stopReminderWatcher(); stopNicknames(); watching = false }
+  if (event === 'SIGNED_OUT') { state.profile = null; state.recovering = false; teardownChat(true); stopHeartbeat(); stopReminderWatcher(); stopNicknames(); watching = false }
   if (['SIGNED_IN', 'SIGNED_OUT', 'PASSWORD_RECOVERY'].includes(event)) setTimeout(route, 0)
 })
 
@@ -54,11 +51,11 @@ async function route() {
   const [name = '', arg, arg2] = (location.hash.replace(/^#\/?/, '') || '').split('/')
   const legal = ['terms', 'privacy', 'disclosures'].includes(name)
 
-  if (state.recovering && state.session) { teardownChat(); return renderReset(root) }
+  if (state.recovering && state.session) { teardownChat(true); return renderReset(root) }
   if (legal) { teardownChat(); return renderLegal(root, name, !!state.session) }
 
   if (!state.session) {
-    teardownChat()
+    teardownChat(true)
     if (!PUBLIC.has(name)) return go('#/login')
     return renderAuth(root, name === 'register' ? 'register' : name === 'forgot' ? 'forgot' : 'login')
   }

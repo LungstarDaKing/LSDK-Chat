@@ -4,6 +4,7 @@ import { startRingtone, stopRingtone } from '../lib/ringtones.js'
 import { fmtDuration } from '../lib/voice.js'
 import { loadGroupCallLog, clearGroupCallLog } from '../lib/group-calls.js'
 import { icon } from './icons.js'
+import { attachMini, floatVideo } from './mini-window.js'
 
 // Plays a shared screen WITH its sound. Browsers sometimes refuse sound until the person taps; then a chip asks for the tap.
 export function playWithSound(video, chip) {
@@ -18,7 +19,7 @@ export function playWithSound(video, chip) {
 // Full-screen call window driven by CallManager state.
 export class CallOverlay {
   constructor(ctx, mgr) {
-    this.ctx = ctx; this.mgr = mgr; this.el = null; this.phase = 'idle'; this.timer = null
+    this.ctx = ctx; this.mgr = mgr; this.el = null; this.phase = 'idle'; this.timer = null; this.mini = false
   }
   update(s) {
     if (s.phase === 'idle') { this.hide(); return }
@@ -43,8 +44,18 @@ export class CallOverlay {
     this.controls = h('div', { class: 'call-controls' })
     this.el = h('div', { class: 'call-overlay', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Call', tabIndex: -1 },
       this.remote, this.screenView, this.soundChip, this.local, this.sharing, h('div', { class: 'call-center' }, this.avatarBox, this.name, this.status), this.controls)
+    this.minBtn = h('button', { class: 'call-min', type: 'button', 'aria-label': 'Minimise the call and keep using the app', title: 'Minimise: keep using the app', onclick: () => this.setMini(true) }, icon('minimize', 22))
+    this.el.append(this.minBtn)
+    this.miniApi = attachMini(this.el)
+    this.el.addEventListener('dblclick', (e) => { if (this.mini && !e.target.closest('button')) this.setMini(false) })
     document.body.append(this.el)
     this.el.focus()
+  }
+  setMini(on) {
+    this.mini = on
+    this.miniApi?.set(on)
+    if (this.mgr.s) this.drawControls(this.mgr.s)
+    if (!on) this.el?.focus()
   }
   draw(s, first) {
     const peer = s.peerId
@@ -53,6 +64,8 @@ export class CallOverlay {
       clear(this.avatarBox).append(this.ctx.avatar(peer, 'xl')); this.ctx.hydrateAvatars(this.avatarBox)
     }
     const active = s.phase === 'active'
+    if (s.phase === 'incoming' && this.mini) this.setMini(false)
+    this.minBtn.hidden = s.phase === 'incoming' || this.mini
     const video = s.kind === 'video' || s.remoteCam
     this.el.classList.toggle('video', active && (video || !!s.remoteScreen))
     this.el.classList.toggle('has-screen', active && !!s.remoteScreen)
@@ -72,23 +85,31 @@ export class CallOverlay {
     this.drawControls(s)
   }
   drawControls(s) {
-    const b = (cls, label, ico, fn, on) => h('button', { class: `call-btn ${cls}${on ? ' on' : ''}`, type: 'button', 'aria-label': label, title: label, 'aria-pressed': on == null ? null : String(!!on), onclick: fn }, h('span', { 'aria-hidden': 'true' }, icon(ico, 26)))
+    const b = (cls, label, ico, fn, on) => h('button', { class: `call-btn ${cls}${on ? ' on' : ''}`, type: 'button', 'aria-label': label, title: label, 'aria-pressed': on == null ? null : String(!!on), onclick: fn }, h('span', { 'aria-hidden': 'true' }, icon(ico, this.mini ? 20 : 26)))
     clear(this.controls)
     if (s.phase === 'incoming') {
       this.controls.append(b('red', 'Decline', 'phone-off', () => this.mgr.decline()), b('green', 'Accept', 'phone', () => this.mgr.accept()))
       return
     }
     this.controls.append(b('', s.muted ? 'Unmute' : 'Mute', s.muted ? 'mic-off' : 'mic', () => this.mgr.toggleMute(), s.muted))
+    if (this.mini) {
+      this.controls.append(b('', 'Open the call screen', 'expand', () => this.setMini(false)), b('red hang', 'End call', 'phone-off', () => this.mgr.hangup()))
+      return
+    }
     const active = s.phase === 'active'
     const hasCam = !!s.local?.getVideoTracks().length
     if (hasCam) this.controls.append(b('', s.camOff ? 'Turn camera on' : 'Turn camera off', s.camOff ? 'video-off' : 'video', () => this.mgr.toggleCamera(), s.camOff))
     else if (active) this.controls.append(b('', 'Switch to video', 'video', () => this.mgr.enableVideo().catch((e) => toast(e.message))))
     if (active && screenShareSupported()) this.controls.append(b('', s.screen ? 'Stop sharing screen' : 'Share screen', 'screen',
       () => (s.screen ? Promise.resolve(this.mgr.stopScreenShare()) : this.mgr.startScreenShare()).catch((e) => toast(e.message)), !!s.screen))
+    if (active && document.pictureInPictureEnabled) this.controls.append(b('', 'Float the video over other apps', 'pip', () => floatVideo(s.remoteScreen ? this.screenView : this.remote).catch((e) => toast(e.message))))
+    if (active && this.ctx.watchWith) this.controls.append(b('', 'Watch together', 'tv', () => this.ctx.watchWith(s.peerId)))
     this.controls.append(b('red hang', 'End call', 'phone-off', () => this.mgr.hangup()))
   }
   hide() {
     stopRingtone(); clearInterval(this.timer)
+    this.mini = false; this.miniApi?.destroy(); this.miniApi = null
+    if (document.pictureInPictureElement) document.exitPictureInPicture?.().catch(() => {})
     if (this.el) { this.remote.srcObject = null; this.local.srcObject = null; this.screenView.srcObject = null; this.el.remove(); this.prev?.focus?.() }
     this.el = null; this.phase = 'idle'
   }

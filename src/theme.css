@@ -464,3 +464,32 @@ html[data-contrast='high'] .rail { background: #000; }
 .dart-scores > div.on { outline: 2px solid #F5B83D; } .dart-scores b { display: block; font-size: 1.8rem; font-family: var(--font-display, inherit); }
 .dart-tally { text-align: center; font-weight: 600; min-height: 1.4em; margin: .2rem 0; } .dart-throw { display: block; margin: .3rem auto; min-width: 140px; }
 .dart-log { padding-left: 1.1rem; margin: .5rem 0 0; }
+
+/* ---- v0.13: minimised, draggable call window ---- */
+.call-min { position: absolute; top: calc(1rem + env(safe-area-inset-top)); left: 1rem; z-index: 6; width: 42px; height: 42px; border-radius: 50%; border: 0; display: grid; place-items: center; background: #ffffff26; color: #fff; cursor: pointer; backdrop-filter: blur(6px); }
+.call-min[hidden] { display: none; }
+.call-overlay.mini { inset: auto; right: 12px; bottom: 84px; width: 176px; height: 232px; border-radius: 20px; box-shadow: 0 12px 40px #0009, 0 0 0 1px #ffffff2e; z-index: 1200; overflow: hidden; touch-action: none; cursor: grab; user-select: none; }
+.call-overlay.mini.dragging { cursor: grabbing; }
+.call-overlay.mini .call-local, .call-overlay.mini .call-min, .call-overlay.mini .call-sharing, .call-overlay.mini .sound-chip { display: none; }
+.call-overlay.mini .call-avatar { transform: scale(.55); margin: -1.2rem 0 -1.4rem; }
+.call-overlay.mini .call-name { font-size: .95rem; margin: 0; } .call-overlay.mini .call-status { font-size: .8rem; }
+.call-overlay.mini .call-controls { bottom: .6rem; gap: .5rem; left: 0; right: 0; justify-content: center; }
+.call-overlay.mini .call-btn { width: 42px; height: 42px; }
+.gc-overlay.mini .gc-grid, .gc-overlay.mini .gc-stage, .gc-overlay.mini .gc-head .gc-status { display: none; }
+.gc-overlay.mini .gc-head { position: static; padding: .6rem .8rem 0; text-align: center; } .gc-overlay.mini .gc-title { font-size: .95rem; margin: 0; }
+.gc-overlay.mini .call-center { display: flex; }
+@media (max-width: 560px) { .call-overlay.mini { width: 132px; height: 176px; bottom: 96px; } }
+
+/* ---- v0.13: watch together ---- */
+.watch-panel { position: fixed; right: 12px; bottom: 84px; width: min(380px, calc(100vw - 24px)); max-height: calc(100vh - 100px); overflow: auto; z-index: 1100; background: var(--surface); color: var(--text); border-radius: 18px; box-shadow: var(--shadow), 0 0 0 1px var(--border); padding: .4rem .6rem .7rem; }
+.watch-panel.large { width: min(760px, calc(100vw - 24px)); }
+.wp-head { display: flex; align-items: center; gap: .4rem; cursor: grab; padding: .2rem 0 .4rem; } .wp-title { flex: 1; font-weight: 650; font-size: .95rem; }
+.wp-stage { position: relative; border-radius: 12px; overflow: hidden; background: #000; }
+.wp-frame iframe { width: 100%; height: 100%; border: 0; display: block; }
+.wp-frame.yt { aspect-ratio: 16 / 9; } .wp-frame.sp { height: 152px; } .wp-frame.sp.big { height: 352px; } .wp-frame.am { height: 175px; } .wp-frame.am.big { height: 450px; } .wp-frame.tt { height: min(60vh, 575px); background: #fff; }
+.wp-countdown { position: absolute; inset: 0; display: grid; place-items: center; font-size: 3.4rem; font-weight: 800; color: #F5B83D; background: #000b; text-align: center; padding: 1rem; z-index: 3; }
+.wp-countdown[hidden], .wp-chip[hidden] { display: none; }
+.wp-chip { position: absolute; left: 50%; bottom: .6rem; transform: translateX(-50%); z-index: 4; background: #F5B83D; color: #15102B; border-radius: 999px; display: inline-flex; gap: .3rem; align-items: center; }
+.wp-status { margin: .5rem 0 .2rem; } .wp-actions, .wp-request { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; margin-top: .4rem; }
+.wp-request { background: var(--surface-2); padding: .4rem .6rem; border-radius: 10px; } .wp-help { padding-left: 1.1rem; margin: .6rem 0 0; }
+@media (max-width: 560px) { .watch-panel { top: 0; left: 0; right: 0; bottom: auto; width: 100%; max-width: 100%; border-radius: 0 0 18px 18px; padding-top: calc(.4rem + env(safe-area-inset-top)); max-height: 78vh; } .watch-panel.large { width: 100%; } .wp-head { cursor: default; } }
