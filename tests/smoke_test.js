@@ -45,14 +45,16 @@ const flush = () => new Promise((r) => setTimeout(r, 20))
 beforeEach(() => { document.body.innerHTML = '<div id="app"></div>'; window.__pwned = 0; calls.length = 0; vi.clearAllMocks() })
 
 describe('legal pages', () => {
-  it('render all three documents and flag missing operator details', async () => {
+  it('render all three documents and flag missing operator details only when unfilled', async () => {
     const { renderLegal } = await import('../src/pages/legal.js')
+    const { operatorConfigured } = await import('../src/config.js')
     const root = document.getElementById('app')
     for (const n of ['terms', 'privacy', 'disclosures']) {
       renderLegal(root, n, false)
       expect(root.querySelector('h1').textContent.length).toBeGreaterThan(5)
       expect(root.querySelectorAll('section').length).toBeGreaterThan(5)
-      expect(root.textContent).toContain('Operator details are not filled in')
+      // The warning must show only while config.js still has placeholders (works for any config).
+      expect(root.textContent.includes('Operator details are not filled in')).toBe(!operatorConfigured())
     }
   })
 })
