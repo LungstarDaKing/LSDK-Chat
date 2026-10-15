@@ -15,10 +15,17 @@ export class WatchPanel {
     this.ctx = ctx; this.ctl = controller; this.room = roomId; this.me = ctx.me.id; this.row = row; this.receivedAt = Date.now()
     this.embedBase = embedBase; this.mute = 0; this.large = false; this.cd = row.cd; this.dead = false
     this.build()
-    this.unlisten = watchApi.listen(roomId, (r) => this.onRow(r), () => this.gone())
+    try {
+      this.paint()      // the title and buttons first, so the panel is never an empty strip
+      this.mountPlayer()
+      this.paint()
+      this.unlisten = watchApi.listen(roomId, (r) => this.onRow(r), () => this.gone())
+    } catch (e) {
+      console.error('Watch together could not start', e)
+      this.dead = true; this.unlisten?.(); this.bridge?.destroy(); this.el.remove()
+      throw e
+    }
     this.poll = setInterval(async () => { try { const r = await watchApi.get(roomId); if (r) this.onRow(r); else this.gone() } catch { /* ignore */ } }, 12000)
-    this.mountPlayer()
-    this.paint()
   }
   get isController() { return this.row.controllers.includes(this.me) }
   get isHost() { return this.row.host === this.me }
@@ -185,8 +192,10 @@ export class WatchController {
   }
   openPanel(row, opts) {
     this.panel?.close()
-    this.panel = new WatchPanel(this.ctx, this, row.room_id, row, opts)
+    this.panel = null
+    try { this.panel = new WatchPanel(this.ctx, this, row.room_id, row, opts) } catch (e) { toast('The player could not open. Tap Join to try again.', 'error'); this.paint(row); return false }
     this.banner.hidden = true
+    return true
   }
   panelClosed(p, ended) { if (this.panel === p) this.panel = null; this.refresh(); if (ended) this.ctx.releaseIfDone?.() ; else setTimeout(() => this.ctx.releaseIfDone?.(), 0) }
   startDialog(roomId) {
@@ -199,7 +208,8 @@ export class WatchController {
     dialog({ title: 'Watch together', body, actions: [{ label: 'Cancel' }, { label: 'Start', kind: 'primary', onClick: async () => {
       const r = parseMediaLink(input.value)
       if (r.error) { toast(r.error, 'error'); return 'keep-open' }
-      try { await watchApi.start(roomId, r.provider, r.id); this.openPanel(await watchApi.get(roomId)) } catch (e) { toast(friendlyError(e), 'error'); return 'keep-open' }
+      try { await watchApi.start(roomId, r.provider, r.id) } catch (e) { toast(friendlyError(e), 'error'); return 'keep-open' }
+      try { const row = await watchApi.get(roomId); if (row) this.openPanel(row) } catch (e) { toast(friendlyError(e), 'error'); this.refresh() }   // started fine: never start twice
     } }] })
     setTimeout(() => input.focus(), 0)
   }

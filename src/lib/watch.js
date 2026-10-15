@@ -58,6 +58,7 @@ export function embedUrl(provider, id, { origin = '' } = {}) {
   return `${base}/embed/v2/${id}`
 }
 
+let listenerCount = 0
 const ok = ({ data, error }) => { if (error) throw error; return data }
 export const watchApi = {
   start: async (room, provider, id) => ok(await supabase.rpc('watch_start', { p_room: room, p_provider: provider, p_media: id })),
@@ -67,7 +68,9 @@ export const watchApi = {
   stop: async (room) => ok(await supabase.rpc('watch_stop', { p_room: room })),
   get: async (room) => ok(await supabase.from('watch_sessions').select('*').eq('room_id', room).maybeSingle()),
   listen(room, onRow, onGone) {
-    const ch = supabase.channel(`watch-${room}`)
+    // Every listener needs its OWN channel name. The banner and the player both listen to the same room; sharing one
+    // name made the second one throw while the player was being built (empty player that could not be closed).
+    const ch = supabase.channel(`watch-${room}-${++listenerCount}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'watch_sessions', filter: `room_id=eq.${room}` }, (p) => (p.eventType === 'DELETE' ? onGone() : p.new && onRow(p.new)))
       .subscribe()
     return () => supabase.removeChannel(ch)
