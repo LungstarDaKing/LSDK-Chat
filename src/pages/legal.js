@@ -43,6 +43,10 @@ const TERMS = () => [
   { h: '6b. Reactions, likes and comments', ul: [
     'Emoji reactions on messages are visible to everyone in that chat. Likes on a status are visible to the person who posted it. Comments on a status are private replies: only the person who posted the status and the person who wrote the comment can see them. The author can delete or report comments.',
     'The rules in section 6 apply to comments too. A person who views your status can save its photo, video or audio to their device, and nobody can stop screenshots; only post what you are happy to have saved.'] },
+  { h: '6c. LUNEX assistant', ul: [
+    'LUNEX is an optional AI assistant inside the app. It can make mistakes and its answers are not professional advice. Check anything important yourself.',
+    'What you type to LUNEX, and any chat messages you choose to share with it (for example with "Summarize this chat"), are sent to the LUNEX service and to the third-party AI provider it uses to write the answer. Do not send passwords, secrets or private information about other people.',
+    'Do not use LUNEX to break the law, harass people, or try to make it ignore its rules. Use is limited per person per day and may be changed or stopped at any time.'] },
   { h: '7. Reporting and moderation', p: [
     'Every message from another person has a Report option. Reports (including a copy of the reported message and a reference to any attached file) are sent to us and reviewed manually by the operator, who is a person, not a 24/7 moderation team. We may remove content (including files and profile pictures), restrict features, or suspend or delete accounts that break these Terms or put others or the Service at risk. We are not obliged to monitor content and do not promise to act on every report or within a set time.'] },
   { h: '8. Do not share sensitive information', p: [
@@ -78,7 +82,7 @@ const PRIVACY = () => [
     'Activity data: a "last active" timestamp, refreshed about once a minute while the app is open in a visible browser tab, and your online / last-seen settings.',
     'Technical data: your IP address, browser/device information and timestamps are processed in the server logs of our providers (Supabase and GitHub) when you use the Service or sign in. We do not build profiles from them, but we may look at them to investigate abuse or security problems.',
     'Photos you send are re-saved by your browser before upload, which removes location and camera details (EXIF). Videos, audio, PDFs and text files are uploaded unchanged and may contain such details.',
-    'On your device: the sign-in session (an access token) is kept in your browser\'s local storage so you stay signed in, plus your sound, typing-bubble, theme and chat-background choices. A chat background picture you choose stays only in your browser and is never uploaded. We use no advertising or analytics cookies or trackers, and load no third-party fonts, scripts or images. The one exception is Watch together: when you or a friend open a YouTube, Spotify, Apple Music or TikTok link in a chat, your browser loads that provider\'s player inside the app, and that provider then receives your IP address and may set its own cookies under its own privacy policy. Nothing is loaded from them unless you open a Watch together session.'] },
+    'On your device: the sign-in session (an access token) is kept in your browser\'s local storage so you stay signed in, plus your sound, typing-bubble, theme and chat-background choices. A chat background picture you choose stays only in your browser and is never uploaded. We use no advertising or analytics cookies or trackers, and load no third-party fonts, scripts or images.'] },
   { h: '3. Why we use it', ul: [
     'To provide the Service: create your account, authenticate you, deliver messages to the right people (performance of the agreement with you).',
     'To keep the Service safe: rate-limiting, handling reports, investigating abuse, and preventing unauthorised access (our legitimate interests).',
@@ -94,6 +98,9 @@ const PRIVACY = () => [
     `Supabase (accounts, database, file storage, real-time messaging and sending account emails): data is stored in the region chosen for our project - ${region()}. Support or infrastructure staff of the provider may process it as described in Supabase's own terms and privacy policy.`,
     'GitHub (GitHub Pages hosts the website files): GitHub receives your IP address and request details when you load the site, as described in GitHub\'s privacy statement. Your messages are not sent to GitHub.',
     'Data may therefore be processed outside your country. We do not sell your information, do not show ads, and do not share it with anyone else except where the law compels us to.'] },
+  { h: '5a. LUNEX assistant (optional)', ul: [
+    'If you use LUNEX, what you write to it (and any chat messages you choose to share with it) is sent to the LUNEX service, hosted by Render, and from there to an AI provider such as Groq, Google or OpenRouter that generates the reply. For web research, LUNEX also sends search words to a web search service and reads public web pages. These providers process the text under their own terms and privacy policies; some free AI services may keep or review prompts to improve their systems, so do not send sensitive information.',
+    'The LUNEX service checks that you are signed in (using your sign-in token) and counts your daily use. We do not store your LUNEX messages in our database: your LUNEX conversation is kept only in this browser and is removed when you sign out or tap Clear.'] },
   { h: '6. How long we keep it', ul: [
     'Your account, profile, picture, memberships, messages and files are kept until you or a room admin delete them, or you delete your account.',
     'When you delete your account, your account, profile, picture, room memberships, all messages you sent and all files you uploaded are deleted immediately (the app deletes your files first and stops if that fails). Deleting a single message also deletes its file, and when the last member leaves a group its messages and files are deleted. Rooms with no remaining members are deleted. Backups, if any are kept by our provider under the plan in use, expire on the provider\'s schedule.',
@@ -126,6 +133,9 @@ const DISCLOSURES = () => [
     'Calls ring only while the app is open in a browser tab. There is no push notification, so you can miss a call.'] },
   { h: 'Status updates', p: ['Anyone you share a chat with can see your status updates for 24 hours unless you turn sharing off. They can like and comment (comments are private to you and the commenter), and they can save or screenshot them. Reported updates are kept until the operator reviews them.'] },
   { h: 'Moderation is manual and limited', p: ['Reports are read by the operator when they have time. There is no automatic filtering and no guaranteed response time.'] },
+  { h: 'LUNEX assistant', ul: [
+    'LUNEX is an AI. It can be wrong, out of date, or make things up. Do not rely on it for medical, legal, money or safety decisions.',
+    'Anything you send to LUNEX leaves this app and goes to the LUNEX server and an AI provider (see the Privacy Policy). "Summarize this chat" sends the last messages of that chat, so only use it where everyone\'s messages are fine to share. Free AI services can be slow, rate-limited or unavailable, and LUNEX may take up to a minute to wake up.'] },
   { h: 'Your data', ul: [
     'Stored with Supabase in the region stated in the Privacy Policy; the site files are served by GitHub Pages.',
     'Your sign-in token is kept in this browser\'s local storage. On a shared or public computer, sign out when you finish.',

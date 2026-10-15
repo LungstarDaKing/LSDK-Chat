@@ -16,6 +16,9 @@ export const CONFIG = {
   // networks. Leave empty ('') to turn the relay off; calls then try direct connections only.
   turnUrl: 'https://lsdk-turn.mthethwalungelo43.workers.dev/',
 
+  // LUNEX assistant (hosted on Render). Leave empty ('') to hide LUNEX from the app.
+  lunexUrl: 'https://lunex-z3du.onrender.com',
+
   // --- shown in the legal pages ---
   operatorName: 'Lungelo Mthethwa' ,          // <<< SET THIS (person/entity responsible for the service)
   contactEmail: 'mthethwalungelo43@gmail.com' ,      // <<< SET THIS (a mailbox you actually read)

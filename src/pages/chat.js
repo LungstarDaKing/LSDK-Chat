@@ -23,8 +23,9 @@ import { getA11y } from '../lib/a11y.js'
 import { icon } from '../ui/icons.js'
 import { GroupCallManager, supabaseGroupApi } from '../lib/group-calls.js'
 import { GroupCallOverlay } from '../ui/group-call-ui.js'
+import { LunexClient, chatContext } from '../lib/lunex.js'
+import { LunexPanel } from '../ui/lunex-ui.js'
 import { GamesController } from '../ui/games-ui.js'
-import { WatchController } from '../ui/watch-ui.js'
 import { loadNicknames, watchNicknames, onNicknames, nickOf, nickFor } from '../lib/nicknames.js'
 import logoUrl from '../assets/logo.svg'
 
@@ -33,17 +34,10 @@ const MAX_LEN = 1000
 const MSG_COLS = '*'          // all columns, so newer columns (status_label, v0.9) never break an older database
 
 let chat = null
-// Leaving the chat screen (Tools, Settings, Profile) must not end a call or a watch-together session.
-// While one is running the chat is only set aside (hidden) and picked up again when you come back.
-export function teardownChat(force = false) {
-  if (chat && !force && chat.isLive()) { chat.detached = true; return }
-  if (chat) chat.destroy()
-  chat = null
-}
+export function teardownChat() { if (chat) chat.destroy(); chat = null }
 export function renderChat(root, roomId, msgId = null) {
-  if (chat?.detached) { chat.detached = false; clear(root).append(chat.el) }
-  else if (!chat || !root.contains(chat.el)) {
-    teardownChat(true)
+  if (!chat || !root.contains(chat.el)) {
+    teardownChat()
     chat = new Chat(root)
   }
   chat.open(roomId, msgId)
@@ -106,6 +100,9 @@ class Chat {
     this.roomsLoaded = false
     this.loadingMsgs = false
     this.newBelow = 0
+    // LUNEX assistant (only when CONFIG.lunexUrl is set)
+    this.lunex = CONFIG.lunexUrl ? new LunexClient({ baseUrl: CONFIG.lunexUrl, getToken: async () => (await supabase.auth.getSession()).data.session?.access_token }) : null
+    this.lunexPanel = this.lunex ? new LunexPanel(this, this.lunex) : null
     this.build(root)
     this.init()
   }
@@ -143,7 +140,7 @@ class Chat {
     this.paneSub = h('div', { class: 'pane-sub' })
     this.paneAvatar = h('span', { class: 'avatar sm' })
     this.games = new GamesController(this)
-    this.watch = new WatchController(this)
+    this.lunexBtn = h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Ask LUNEX about this chat', title: 'Ask LUNEX / summarize this chat', hidden: !this.lunexPanel, onclick: () => this.askLunexAboutChat() }, icon('sparkle'))
     this.voiceCallBtn = h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Voice call', title: 'Voice call', onclick: () => this.callRoom('voice') }, icon('phone'))
     this.videoCallBtn = h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Video call', title: 'Video call', onclick: () => this.callRoom('video') }, icon('video'))
     this.infoBtn = h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Chat info', title: 'Chat info', onclick: () => this.openInfo() }, icon('info'))
@@ -198,8 +195,8 @@ class Chat {
       h('header', { class: 'pane-head' },
         h('button', { class: 'btn icon ghost back', type: 'button', 'aria-label': 'Back to chats', onclick: () => go('#/chat') }, icon('back')),
         this.paneAvatar,
-        h('div', { class: 'pane-titles' }, this.paneTitle, this.paneSub), this.voiceCallBtn, this.videoCallBtn, this.watch.btn, this.games.btn, this.infoBtn),
-      this.callBanner, this.games.banner, this.watch.banner, this.thread, this.composer)
+        h('div', { class: 'pane-titles' }, this.paneTitle, this.paneSub), this.lunexBtn, this.voiceCallBtn, this.videoCallBtn, this.games.btn, this.infoBtn),
+      this.callBanner, this.games.banner, this.thread, this.composer)
     // drag & drop a file onto the conversation
     this.pane.addEventListener('dragover', (e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault() })
     this.pane.addEventListener('drop', (e) => {
@@ -294,30 +291,18 @@ class Chat {
     document.addEventListener('keydown', this.onKey)
   }
 
-  // "Watch together" from the call screen: open the player in the chat you have with the person you are talking to
-  watchWith(peerId) {
-    const r = this.rooms.find((x) => x.is_direct && !x.notes_owner && x.participants.some((p) => p.profile_id === peerId))
-    if (!r) return toast('Open a chat with them first.')
-    this.watch.setRoom(r); this.watch.btn.hidden = false
-    this.watch.open()
-  }
-  // a call or a shared player is running
-  isLive() { return !!this.alive && ((this.calls && this.calls.s.phase !== 'idle') || (this.gcalls && this.gcalls.s.phase !== 'idle') || !!this.watch?.active) }
-  // once whatever kept a set-aside chat alive has ended, let it go
-  releaseIfDone() { if (this.detached && !this.isLive()) teardownChat(true) }
-
   destroy() {
     this.stopDictation()
     this.alive = false
     this.unNick?.()
     this.games?.destroy()
-    this.watch?.destroy()
     clearInterval(this.poll)
     document.removeEventListener('visibilitychange', this.onVis)
     document.removeEventListener('keydown', this.onKey)
     if (this.channel) supabase.removeChannel(this.channel)
     this.events?.leave()
     this.rec?.cancel()
+    this.lunexPanel?.close()
     this.calls?.hangup?.()
     this.calls?.destroy()
     clearTimeout(this.bannerT)
@@ -369,7 +354,6 @@ class Chat {
     try { await this.gcalls.join(callId) } catch (e) { toast(friendlyError(e), 'error') }
   }
   onGroupCallEnded({ reason, message }) {
-    setTimeout(() => this.releaseIfDone(), 0)
     if (message) toast(message, reason === 'error' ? 'error' : 'info')
     else if (reason === 'ended') toast('Call ended')
     if (this.tab === 'calls' && this.alive) renderCalls(this.callsView, this)
@@ -389,7 +373,6 @@ class Chat {
     this.callBanner.hidden = false
   }
   onCallEnded({ reason, message }) {
-    setTimeout(() => this.releaseIfDone(), 0)
     if (message && reason !== 'ended') toast(message, reason === 'error' ? 'error' : 'info')
     else if (reason === 'ended') toast('Call ended')
     if (this.tab === 'calls' && this.alive) renderCalls(this.callsView, this)
@@ -536,6 +519,26 @@ class Chat {
     return [who, media && h('span', { class: 'pv-ico' }, icon(attachIcon(p), 14)), media ? (p.content || attachWord(p)) : p.content]
   }
 
+  lunexRow() {
+    return h('li', { class: 'room-li' },
+      h('a', { class: 'room-item lunex-row', href: '#', onclick: (e) => { e.preventDefault(); this.lunexPanel.open() } },
+        h('span', { class: 'avatar md lunex-av', 'aria-hidden': 'true' }, icon('sparkle', 22)),
+        h('span', { class: 'room-meta' },
+          h('span', { class: 'room-top' }, h('span', { class: 'room-name' }, 'LUNEX'), h('span', { class: 'lunex-tag' }, 'AI')),
+          h('span', { class: 'room-bottom' }, h('span', { class: 'room-sub' }, this.lunexPanel.preview())))))
+  }
+
+  // "Summarize this chat": only after the user agrees, and only the visible text messages are sent
+  async askLunexAboutChat() {
+    const r = this.room()
+    if (!r || !this.lunexPanel) return
+    const msgs = this.messages.filter((m) => m.content && !m.deleted_at && !m.pending && !String(m.id).startsWith('tmp')).slice(-100)
+    if (!msgs.length) { this.lunexPanel.open(); return }
+    const ok = await confirmDialog('Ask LUNEX about this chat?', `LUNEX will read the last ${msgs.length} text messages in this chat to write a summary. They are sent to LUNEX and its AI provider. Other people in the chat are not told. Don't do this for chats with private information.`, 'Summarize')
+    if (!ok) return
+    this.lunexPanel.summarize(this.title(r), chatContext(msgs, (id) => this.nameOf(id)))
+  }
+
   renderRooms() {
     clear(this.roomList)
     let total = 0
@@ -547,6 +550,7 @@ class Chat {
       for (let i = 0; i < 7; i++) this.roomList.append(h('li', { class: 'sk-row', 'aria-hidden': 'true' }, h('i', { class: 'sk sk-av' }), h('span', { class: 'sk-lines' }, h('i', { class: 'sk' }), h('i', { class: 'sk short' }))))
       return
     }
+    if (this.lunexPanel && this.filter === 'all') this.roomList.append(this.lunexRow())
     if (!this.rooms.length) {
       this.roomList.append(h('li', { class: 'room-empty' }, h('img', { class: 'empty-logo sm', src: logoUrl, alt: '', width: 72, height: 72 }), h('h2', {}, 'No chats yet'),
         h('p', { class: 'small' }, 'Start a conversation with a friend, or make a group.'),
@@ -593,7 +597,6 @@ class Chat {
     this.voiceCallBtn.hidden = this.videoCallBtn.hidden = !!r.notes_owner || !this.calls
     this.refreshCallBannerSoon()
     this.games.setRoom(r)
-    this.watch.setRoom(r)
     const fresh = this.roomAvatar(r, 'sm')
     this.paneAvatar.replaceWith(fresh); this.paneAvatar = fresh
     if (peer) { fresh.classList.add('clickable'); fresh.onclick = () => this.showProfile(peer) }

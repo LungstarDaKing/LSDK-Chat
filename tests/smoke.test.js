@@ -45,15 +45,14 @@ const flush = () => new Promise((r) => setTimeout(r, 20))
 beforeEach(() => { document.body.innerHTML = '<div id="app"></div>'; window.__pwned = 0; calls.length = 0; vi.clearAllMocks() })
 
 describe('legal pages', () => {
-  it('render all three documents and flag missing operator details only when unfilled', async () => {
+  it('render all three documents and flag missing operator details', async () => {
     const { renderLegal } = await import('../src/pages/legal.js')
-    const { operatorConfigured } = await import('../src/config.js')
     const root = document.getElementById('app')
     for (const n of ['terms', 'privacy', 'disclosures']) {
       renderLegal(root, n, false)
       expect(root.querySelector('h1').textContent.length).toBeGreaterThan(5)
       expect(root.querySelectorAll('section').length).toBeGreaterThan(5)
-      expect(root.textContent.includes('Operator details are not filled in')).toBe(!operatorConfigured())
+      expect(root.textContent).toContain('Operator details are not filled in')
     }
   })
 })
@@ -95,7 +94,9 @@ describe('chat page', () => {
     const { renderChat, teardownChat } = await import('../src/pages/chat.js')
     const root = document.getElementById('app')
     renderChat(root, 'r1'); await flush(); await flush()
-    expect(root.querySelector('.room-name').textContent).toBe('Team')
+    const names = [...root.querySelectorAll('.room-name')].map((e) => e.textContent)
+    expect(names[0]).toBe('LUNEX')                      // pinned assistant row
+    expect(names).toContain('Team')
     const texts = [...root.querySelectorAll('.msg-row .text')].map((e) => e.textContent).join('|')
     expect(texts).toContain('<img src=x onerror=')
     expect(root.querySelector('.messages img, .messages script')).toBeNull()
