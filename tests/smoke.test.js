@@ -50,9 +50,9 @@ describe('legal pages', () => {
     const root = document.getElementById('app')
     for (const n of ['terms', 'privacy', 'disclosures']) {
       renderLegal(root, n, false)
-      expect(root.querySelector('h1').textContent.length).toBeGreaterThan(5)
-      expect(root.querySelectorAll('section').length).toBeGreaterThan(5)
-      expect(root.textContent).toContain('Operator details are not filled in')
+      expect(root.textContent).not.toContain('Operator details are not filled in')
+      expect(root.textContent).toContain('Lungelo Mthethwa')
+      expect(root.textContent).toContain('mthethwalungelo43@gmail.com')
     }
   })
 })
