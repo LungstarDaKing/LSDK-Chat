@@ -3,7 +3,7 @@
 // page renders, validation works, and user-supplied text can never become HTML.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const ME = { id: 'u1', username: 'alice', bio: 'hello', avatar_path: null, terms_version: '2026-10-17', terms_accepted_at: new Date().toISOString(), created_at: new Date().toISOString() }
+const ME = { id: 'u1', username: 'alice', bio: 'hello', avatar_path: null, terms_version: '2026-10-19', terms_accepted_at: new Date().toISOString(), created_at: new Date().toISOString() }
 const fixtures = {
   profiles: [ME],
   rooms: [{ id: 'r1', name: 'Team', is_direct: false, last_message_at: new Date().toISOString(),
@@ -49,7 +49,6 @@ describe('legal pages', () => {
     const { renderLegal } = await import('../src/pages/legal.js')
     const { operatorConfigured } = await import('../src/config.js')
     const root = document.getElementById('app')
-
     for (const n of ['terms', 'privacy', 'disclosures']) {
       renderLegal(root, n, false)
       expect(root.querySelector('h1').textContent.length).toBeGreaterThan(5)
@@ -75,7 +74,7 @@ describe('auth page', () => {
     root.querySelector('form').dispatchEvent(new Event('submit', { cancelable: true }))
     await flush()
     const arg = fakeSupabase.auth.signUp.mock.calls[0][0]
-    expect(arg.options.data).toEqual({ username: 'alice_1', terms_version: '2026-10-17' })
+    expect(arg.options.data).toEqual({ username: 'alice_1', terms_version: '2026-10-19' })
     expect(root.textContent).toMatch(/Check your email/)
   })
   it('login shows a generic message for bad credentials', async () => {

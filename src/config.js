@@ -18,6 +18,9 @@ export const CONFIG = {
 
   // LUNEX assistant (hosted on Render). Leave empty ('') to hide LUNEX from the app.
   lunexUrl: 'https://lunex-z3du.onrender.com',
+  
+  // Public key for alerts when the app is closed (safe to be public). The PRIVATE key never goes in this file.
+  vapidPublicKey: 'BPNunewokoPUVPBTblR8-IfZJR8M4AFLZ2AKsp_8RsFnoqoSDpHew_02i_BRdAnr0v3maDREBCYfI9tfAJ_9I7w',
 
   // --- shown in the legal pages ---
   operatorName: 'Lungelo Mthethwa' ,          // <<< SET THIS (person/entity responsible for the service)
@@ -30,6 +33,7 @@ export const CONFIG = {
   termsVersion: '2026-10-07',
   minAge: 18,
 }
+
 
 export const isPlaceholder = (v) => !v || String(v).startsWith('REPLACE_')
 export const operatorConfigured = () =>

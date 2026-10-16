@@ -28,6 +28,7 @@ import { GroupCallOverlay } from '../ui/group-call-ui.js'
 import { GamesController } from '../ui/games-ui.js'
 import { WatchController } from '../ui/watch-ui.js'
 import { LunexClient, chatContext } from '../lib/lunex.js'
+import { initPush } from '../lib/push.js'
 import { LunexPanel } from '../ui/lunex-ui.js'
 import { loadNicknames, watchNicknames, onNicknames, nickOf, nickFor } from '../lib/nicknames.js'
 import logoUrl from '../assets/logo.svg'
@@ -110,6 +111,7 @@ class Chat {
     this.roomsLoaded = false
     this.loadingMsgs = false
     this.newBelow = 0
+    initPush()    // alerts when the app is closed (does nothing until the person turns them on in Settings)
     // LUNEX assistant (only when CONFIG.lunexUrl is set)
     this.lunex = CONFIG.lunexUrl ? new LunexClient({ baseUrl: CONFIG.lunexUrl, getToken: async () => (await supabase.auth.getSession()).data.session?.access_token }) : null
     this.lunexPanel = this.lunex ? new LunexPanel(this, this.lunex) : null

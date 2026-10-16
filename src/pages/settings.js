@@ -9,6 +9,7 @@ import { clearCallLog } from '../lib/calls.js'
 import { state } from '../lib/state.js'
 import { TEXT_SIZES, DICTATION_LANGS, getA11y, setA11y } from '../lib/a11y.js'
 import { dictationSupported } from '../lib/dictation.js'
+import { pushSettingsEl, unlinkPush } from '../lib/push.js'
 
 export async function renderSettings(root) {
   const uid = state.session.user.id
@@ -132,7 +133,7 @@ export async function renderSettings(root) {
           h('button', { class: 'btn', type: 'button', onclick: () => { removeCustomImage(); drawGrid(); paint() } }, 'Remove my picture'))),
       dimBox,
       h('p', { class: 'small' }, 'Backgrounds and your picture are stored only on this device (in this browser). Nothing is uploaded, and other people do not see your background.')),
-    h('section', {}, h('h2', {}, 'Notifications'), sound.el, likeSound.el),
+    h('section', {}, h('h2', {}, 'Notifications'), pushSettingsEl(), sound.el, likeSound.el),
     accessibility,
     h('section', {}, h('h2', {}, 'Ringtones'),
       h('p', { class: 'small' }, 'Pick the sound for incoming calls. Press Play to hear it. You can add your own audio file (up to 30 seconds and 3 MB). Ringtones are stored only on this device.'),
@@ -145,5 +146,5 @@ export async function renderSettings(root) {
       h('button', { class: 'btn', type: 'button', onclick: async () => { const { error } = await clearCallLog(); error ? toast(friendlyError(error), 'error') : toast('Call history cleared', 'success') } }, 'Clear my call history')),
     h('section', {}, h('h2', {}, 'Legal'), h('p', { class: 'small' },
       h('a', { href: '#/terms', target: '_blank', rel: 'noopener' }, 'Terms'), ' · ', h('a', { href: '#/privacy', target: '_blank', rel: 'noopener' }, 'Privacy'), ' · ', h('a', { href: '#/disclosures', target: '_blank', rel: 'noopener' }, 'Disclosures'))),
-    h('section', {}, h('button', { class: 'btn', type: 'button', onclick: () => supabase.auth.signOut() }, 'Sign out'))))
+    h('section', {}, h('button', { class: 'btn', type: 'button', onclick: async () => { await unlinkPush(); supabase.auth.signOut() } }, 'Sign out'))))
 }
