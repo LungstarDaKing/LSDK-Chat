@@ -3,8 +3,10 @@ import { h, clear, toast, dialog, friendlyError } from '../lib/dom.js'
 import { icon } from './icons.js'
 import { VERSUS, gameApi, tttPlay, tttWinner, twentyAsk, twentyAnswer, TWENTY_MAX, maskLetters, resultLine, dartScore, dartsPlay, BOARD_ORDER } from '../lib/games.js'
 import { SOLO } from '../games/solo.js'
+import { pieceSvg, markSvg, gallowsSvg, svgEl, dartElement } from './game-art.js'
 
-const GLYPH = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' }
+const START = { p: 8, n: 2, b: 2, r: 2, q: 1 }
+const VALUE = { p: 1, n: 3, b: 3, r: 5, q: 9 }
 const FILES = 'abcdefgh'
 
 /* ---------------- a running two-player game ---------------- */
@@ -63,46 +65,74 @@ export class GameSession {
   ttt() {
     const g = this.game, board = g.state.board || [], win = tttWinner(board)?.line || []
     const myMark = this.me === g.p1 ? 'X' : 'O'
+    const prev = this.prevBoard || []
+    this.prevBoard = [...board]
     return h('div', {},
       h('p', { class: 'small' }, `You are ${myMark}`),
       h('div', { class: 'ttt', role: 'grid', 'aria-label': 'Tic-tac-toe board' }, board.map((v, i) =>
         h('button', { class: `ttt-cell${win.includes(i) ? ' win' : ''}${v ? ' ' + v : ''}`, type: 'button', role: 'gridcell', disabled: !this.mine || !!v,
-          'aria-label': `Square ${i + 1}${v ? ', ' + v : ', empty'}`, onclick: () => this.send(tttPlay(g, i, this.me)) }, v || ''))))
+          'aria-label': `Square ${i + 1}${v ? ', ' + v : ', empty'}`, onclick: () => this.send(tttPlay(g, i, this.me)) },
+          v ? markSvg(v, { win: win.includes(i), fresh: prev.length > 0 && !prev[i] }) : null))))
   }
 
   /* --- chess --- */
   chess() {
     const g = this.game, chess = new Chess(g.state.fen), white = this.me === g.p1, myColor = white ? 'w' : 'b'
-    const targets = this.sel ? chess.moves({ square: this.sel, verbose: true }).map((m) => m.to) : []
+    const targets = this.sel ? chess.moves({ square: this.sel, verbose: true }) : []
+    const targetSq = new Map(targets.map((m) => [m.to, m]))
     const last = g.state.last || {}
     const kingInCheck = chess.inCheck() ? chess.board().flat().find((p) => p && p.type === 'k' && p.color === chess.turn())?.square : null
     const rows = white ? [...chess.board()] : [...chess.board()].reverse().map((r) => [...r].reverse())
     const cells = []
     rows.forEach((row, ri) => row.forEach((p, ci) => {
       const file = white ? ci : 7 - ci, rank = white ? 8 - ri : ri + 1, sq = FILES[file] + rank
-      const dark = (file + rank) % 2 === 1
-      cells.push(h('button', { type: 'button', role: 'gridcell', class: `cs ${dark ? 'dark' : 'light'}${this.sel === sq ? ' sel' : ''}${targets.includes(sq) ? ' target' : ''}${sq === last.from || sq === last.to ? ' last' : ''}${sq === kingInCheck ? ' check' : ''}`,
-        'aria-label': `${sq}${p ? ' ' + (p.color === 'w' ? 'white' : 'black') + ' ' + p.type : ''}`, disabled: !this.mine,
-        onclick: () => this.chessClick(chess, sq, myColor) }, p ? h('span', { class: `pc ${p.color}` }, GLYPH[p.type]) : null))
+      const dark = (file + rank) % 2 === 0 ? false : true
+      const t = targetSq.get(sq)
+      cells.push(h('button', { type: 'button', role: 'gridcell', class: `cs ${dark ? 'dark' : 'light'}${this.sel === sq ? ' sel' : ''}${t ? ' target' + (p || t.flags.includes('e') ? ' capture' : '') : ''}${sq === last.from || sq === last.to ? ' last' : ''}${sq === kingInCheck ? ' check' : ''}`,
+        'aria-label': `${sq}${p ? ' ' + (p.color === 'w' ? 'white' : 'black') + ' ' + ({ k: 'king', q: 'queen', r: 'rook', b: 'bishop', n: 'knight', p: 'pawn' })[p.type] : ''}`, disabled: !this.mine && !this.promo,
+        onclick: () => this.chessClick(chess, sq, myColor) },
+        ci === 0 ? h('span', { class: 'coord rank', 'aria-hidden': 'true' }, String(rank)) : null,
+        ri === 7 ? h('span', { class: 'coord file', 'aria-hidden': 'true' }, FILES[file]) : null,
+        p ? pieceSvg(p.type, p.color) : null))
     }))
+    // what each side has captured (counted from the position, so it is always right) and who is ahead
+    const have = { w: { ...START, k: 1 }, b: { ...START, k: 1 } }
+    for (const row of chess.board()) for (const p of row) if (p) have[p.color][p.type]--
+    const lost = (color) => Object.entries(have[color]).filter(([t, n]) => t !== 'k' && n > 0).flatMap(([t, n]) => Array(n).fill(t))
+    const score = (color) => lost(color === 'w' ? 'b' : 'w').reduce((a, t) => a + VALUE[t], 0)
+    const adv = score(myColor) - score(myColor === 'w' ? 'b' : 'w')
+    const tray = (color, plus) => h('div', { class: 'g-captured', 'aria-hidden': 'true' }, lost(color).map((t) => pieceSvg(t, color)), plus > 0 ? h('span', { class: 'adv' }, `+${plus}`) : null)
     const hist = g.state.moves || []
+    const pairs = []
+    for (let i = 0; i < hist.length; i += 2) pairs.push(h('span', {}, h('i', {}, `${i / 2 + 1}.`), ` ${hist[i]}${hist[i + 1] ? ' ' + hist[i + 1] : ''}`))
+    const frame = h('div', { class: 'chess-frame' }, h('div', { class: 'chess', role: 'grid', 'aria-label': 'Chess board' }, cells))
+    if (this.promo) {
+      frame.append(h('div', { class: 'promo', role: 'dialog', 'aria-label': 'Choose a piece' }, h('div', { class: 'promo-row' },
+        ['q', 'r', 'b', 'n'].map((t) => h('button', { type: 'button', 'aria-label': { q: 'Queen', r: 'Rook', b: 'Bishop', n: 'Knight' }[t], onclick: () => { const { from, to } = this.promo; this.promo = null; this.chessMove(chess, from, to, t) } }, pieceSvg(t, myColor))))))
+    }
     return h('div', {}, h('p', { class: 'small' }, `You play ${white ? 'white' : 'black'}${chess.inCheck() && g.status === 'active' ? ' · Check!' : ''}`),
-      h('div', { class: 'chess', role: 'grid', 'aria-label': 'Chess board' }, cells),
-      h('p', { class: 'small g-moves' }, hist.length ? hist.slice(-12).join(' ') : 'No moves yet'))
+      h('div', { class: 'chess-wrap' }, tray(myColor === 'w' ? 'b' : 'w', adv < 0 ? -adv : 0), frame, tray(myColor, adv > 0 ? adv : 0)),
+      h('div', { class: 'small g-moves' }, pairs.length ? pairs.slice(-8) : 'No moves yet'))
   }
   chessClick(chess, sq, myColor) {
+    if (this.promo) { this.promo = null; this.render(); return }
     if (!this.mine) return
     const piece = chess.get(sq)
     if (this.sel && chess.moves({ square: this.sel, verbose: true }).some((m) => m.to === sq)) {
-      const mv = chess.move({ from: this.sel, to: sq, promotion: 'q' })    // pawns that reach the end become queens
-      const moves = [...(this.game.state.moves || []), mv.san]
-      const state = { fen: chess.fen(), moves, last: { from: mv.from, to: mv.to } }
-      if (chess.isCheckmate()) return this.send({ state, status: 'done', winner: this.me, result: 'Checkmate' })
-      if (chess.isDraw()) return this.send({ state, status: 'done', winner: null, result: chess.isStalemate() ? 'Stalemate' : 'Draw' })
-      return this.send({ state, status: 'active', winner: null, result: null })
+      const from = this.sel, mover = chess.get(from)
+      if (mover?.type === 'p' && (sq[1] === '8' || sq[1] === '1')) { this.promo = { from, to: sq }; this.render(); return }
+      return this.chessMove(chess, from, sq, 'q')
     }
     this.sel = piece && piece.color === myColor ? sq : null
     this.render()
+  }
+  chessMove(chess, from, to, promotion) {
+    const mv = chess.move({ from, to, promotion })
+    const moves = [...(this.game.state.moves || []), mv.san]
+    const state = { fen: chess.fen(), moves, last: { from: mv.from, to: mv.to } }
+    if (chess.isCheckmate()) return this.send({ state, status: 'done', winner: this.me, result: 'Checkmate' })
+    if (chess.isDraw()) return this.send({ state, status: 'done', winner: null, result: chess.isStalemate() ? 'Stalemate' : chess.isInsufficientMaterial() ? 'Insufficient material' : chess.isThreefoldRepetition() ? 'Repetition' : 'Draw' })
+    return this.send({ state, status: 'active', winner: null, result: null })
   }
 
   /* --- hangman --- */
@@ -110,45 +140,39 @@ export class GameSession {
     const g = this.game, st = g.state, wrong = st.wrong || [], guesser = g.p2 === this.me
     const word = st.word || (g.p1 === this.me ? this.secret : null)
     const tried = new Set([...(st.right || []), ...wrong])
-    const keys = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map((l) => h('button', { type: 'button', class: `key${wrong.includes(l) ? ' bad' : st.right?.includes(l) ? ' good' : ''}`,
-      disabled: !(guesser && this.mine) || tried.has(l), onclick: () => this.act(() => gameApi.guess(g.id, l)) }, l))
+    const rows = ['QWERTYUIOP', 'ASDFGHJKL', 'ZXCVBNM']
+    const key = (l) => h('button', { type: 'button', class: `key${wrong.includes(l) ? ' bad' : st.right?.includes(l) ? ' good' : ''}`,
+      disabled: !(guesser && this.mine) || tried.has(l), onclick: () => this.act(() => gameApi.guess(g.id, l)) }, l)
     return h('div', {},
-      this.gallows(wrong.length, st.max || 7),
+      gallowsSvg(wrong.length, st.max || 7),
       h('div', { class: 'hang-word', 'aria-label': `Word: ${maskLetters(st.mask).join(' ')}` }, maskLetters(st.mask).map((c) => h('span', { class: 'hl' }, c === '_' ? '' : c))),
-      h('p', { class: 'small' }, `Wrong: ${wrong.join(' ') || 'none'} · ${Math.max(0, (st.max || 7) - wrong.length)} tries left`),
+      h('p', { class: 'small g-center' }, `Wrong: ${wrong.join(' ') || 'none'} · ${Math.max(0, (st.max || 7) - wrong.length)} tries left`),
       g.status === 'done' ? h('p', {}, 'The word was ', h('b', {}, st.word || '')) : (g.p1 === this.me && word ? h('p', { class: 'small' }, 'Your word: ', h('b', {}, word)) : null),
-      guesser ? h('div', { class: 'keys' }, keys) : null)
-  }
-  gallows(n, max) {
-    // draws one more part of the stickman for each wrong guess
-    const NS = 'http://www.w3.org/2000/svg', svg = document.createElementNS(NS, 'svg')
-    svg.setAttribute('viewBox', '0 0 120 120'); svg.setAttribute('class', 'gallows'); svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', `${n} of ${max} wrong`)
-    const add = (tag, a) => { const e = document.createElementNS(NS, tag); for (const k in a) e.setAttribute(k, a[k]); svg.append(e) }
-    const L = (x1, y1, x2, y2) => add('line', { x1, y1, x2, y2 })
-    L(10, 112, 70, 112); L(30, 112, 30, 12); L(30, 12, 80, 12); L(80, 12, 80, 26)                // gallows
-    const parts = [() => add('circle', { cx: 80, cy: 34, r: 8, fill: 'none' }), () => L(80, 42, 80, 72), () => L(80, 50, 66, 62), () => L(80, 50, 94, 62), () => L(80, 72, 68, 92), () => L(80, 72, 92, 92), () => { L(75, 31, 78, 34); L(78, 31, 75, 34); L(82, 31, 85, 34); L(85, 31, 82, 34) }]
-    for (let i = 0; i < Math.min(n, parts.length); i++) parts[i]()
-    return svg
+      guesser ? h('div', { class: 'keys' }, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map(key)) : null)
   }
 
   /* --- darts --- */
   darts() {
     const g = this.game, st = g.state, first = this.me === g.p1
     const mineLeft = first ? st.s1 : st.s2, theirsLeft = first ? st.s2 : st.s1
-    const NS = 'http://www.w3.org/2000/svg'
-    const el = (tag, a, parent) => { const e = document.createElementNS(NS, tag); for (const k in a) e.setAttribute(k, a[k]); parent?.append(e); return e }
+    const el = svgEl
     const pt = (r, deg) => [(r * Math.sin(deg * Math.PI / 180) * 100).toFixed(2), (-r * Math.cos(deg * Math.PI / 180) * 100).toFixed(2)]
     const wedge = (r1, r2, a1, a2) => { const [x1, y1] = pt(r2, a1), [x2, y2] = pt(r2, a2), [x3, y3] = pt(r1, a2), [x4, y4] = pt(r1, a1); return `M${x1} ${y1}A${r2 * 100} ${r2 * 100} 0 0 1 ${x2} ${y2}L${x3} ${y3}A${r1 * 100} ${r1 * 100} 0 0 0 ${x4} ${y4}Z` }
-    const svg = el('svg', { viewBox: '-112 -112 224 224', class: 'dartboard', role: 'img', 'aria-label': 'Dartboard. Tap Throw to release a dart where the cross is.' })
-    el('circle', { r: 110, fill: '#111' }, svg)
+    const svg = el('svg', { viewBox: '-118 -118 236 236', class: 'dartboard', role: 'img', 'aria-label': 'Dartboard. Tap Throw to release a dart where the cross is.' })
+    el('circle', { r: 116, fill: '#3a2a1c' }, svg)                         // wooden surround
+    el('circle', { r: 114, fill: 'none', stroke: '#1d140c', 'stroke-width': 1.5 }, svg)
+    el('circle', { r: 113, fill: '#101010' }, svg)                         // number ring
     BOARD_ORDER.forEach((n, i) => {
       const a1 = i * 18 - 9, a2 = i * 18 + 9, even = i % 2 === 0
-      const single = even ? '#1a1a1a' : '#f1e6c8', ring = even ? '#d6342f' : '#1c8c4a'
+      const single = even ? '#161616' : '#efe2bd', ring = even ? '#d6342f' : '#1c8c4a'
       el('path', { d: wedge(0.094, 0.582, a1, a2), fill: single }, svg); el('path', { d: wedge(0.582, 0.629, a1, a2), fill: ring }, svg)
       el('path', { d: wedge(0.629, 0.953, a1, a2), fill: single }, svg); el('path', { d: wedge(0.953, 1, a1, a2), fill: ring }, svg)
-      const [tx, ty] = pt(1.075, i * 18); const t = el('text', { x: tx, y: ty, 'text-anchor': 'middle', 'dominant-baseline': 'central', fill: '#fff', 'font-size': 8.5, 'font-weight': 700 }, svg); t.textContent = n
+      const [tx, ty] = pt(1.075, i * 18); const t = el('text', { x: tx, y: ty, 'text-anchor': 'middle', 'dominant-baseline': 'central', fill: '#f4f4f4', 'font-size': 9.5, 'font-weight': 800, 'font-family': 'system-ui, sans-serif' }, svg); t.textContent = n
     })
     el('circle', { r: 9.4, fill: '#1c8c4a' }, svg); el('circle', { r: 3.7, fill: '#d6342f' }, svg)
+    // metal wires between the segments and round the rings
+    for (const r of [3.7, 9.4, 58.2, 62.9, 95.3, 100]) el('circle', { r, class: 'wire' }, svg)
+    for (let i = 0; i < 20; i++) { const [x1, y1] = pt(0.094, i * 18 - 9), [x2, y2] = pt(1, i * 18 - 9); el('path', { d: `M${x1} ${y1}L${x2} ${y2}`, class: 'wire' }, svg) }
     const marks = el('g', {}, svg)
     const cross = el('g', { class: 'dart-cross' }, svg); el('circle', { r: 5, fill: 'none', stroke: '#F5B83D', 'stroke-width': 1.6 }, cross); el('path', { d: 'M-9 0H-3M3 0H9M0 -9V-3M0 3V9', stroke: '#F5B83D', 'stroke-width': 1.6 }, cross)
 
@@ -161,7 +185,7 @@ export class GameSession {
       tally.textContent = mine ? `This turn: ${labels}${dt.note ? ' · ' + dt.note : ''}` : ''
       throwBtn.disabled = !mine || dt.busy
     }
-    dt.darts.forEach((d) => el('circle', { cx: d.x * 100, cy: d.y * 100, r: 2.2, fill: '#F5B83D', stroke: '#000', 'stroke-width': .8 }, marks))
+    dt.darts.forEach((d) => dartElement(marks, d.x * 100, d.y * 100))
     if (mine) {
       let raf = 0, t0 = performance.now(); const aim = { x: 0, y: 0 }
       const speed = 1 + dt.darts.length * .18
@@ -175,7 +199,7 @@ export class GameSession {
         if (dt.busy || dt.darts.length >= 3) return
         const x = aim.x + (Math.random() - .5) * .06, y = aim.y + (Math.random() - .5) * .06
         const sc = dartScore(x, y); const d = { ...sc, x, y }
-        dt.darts.push(d); el('circle', { cx: x * 100, cy: y * 100, r: 2.2, fill: '#F5B83D', stroke: '#000', 'stroke-width': .8 }, marks)
+        dt.darts.push(d); dartElement(marks, x * 100, y * 100, { fresh: true })
         const remaining = mineLeft - dt.darts.reduce((a, q) => a + q.pts, 0)
         dt.note = remaining < 0 ? 'Bust! Over zero' : remaining === 0 ? 'Checkout!' : `${remaining} left`
         const done = remaining <= 0 || dt.darts.length === 3

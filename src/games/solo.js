@@ -119,31 +119,50 @@ export function stickmanStep(st, dt) {
 export const newStickman = (rng = Math.random) => ({ t: 0, y: 0, vy: 0, speed: 300, obs: [], gap: 300, score: 0, dead: false, jumpReq: false, rng })
 export function mountStickman(box) {
   const W = 560, H = 220, GROUND = 180
-  const canvas = h('canvas', { class: 'g-canvas', width: W, height: H, tabIndex: 0, role: 'img', 'aria-label': 'Stickman runner. Tap, click or press Space to jump.' })
+  const dpr = Math.min(3, Math.max(1, window.devicePixelRatio || 1))        // crisp on phones and high-density screens
+  const canvas = h('canvas', { class: 'g-canvas', width: Math.round(W * dpr), height: Math.round(H * dpr), tabIndex: 0, role: 'img', 'aria-label': 'Stickman runner. Tap, click or press Space to jump.' })
   const info = h('p', { class: 'small' }, 'Tap, click or press Space to jump.')
   box.append(canvas, info)
   const ctx = canvas.getContext('2d')
-  let st = newStickman(), last = 0, raf = 0, started = false
-  const jump = () => { if (st.dead) { st = newStickman(); started = true; return } started = true; st.jumpReq = true }
+  const stars = Array.from({ length: 28 }, (_, i) => ({ x: (i * 97) % W, y: 8 + ((i * 53) % 110), r: .6 + (i % 3) * .45 }))
+  let st = newStickman(), last = 0, raf = 0, started = false, dist = 0
+  const jump = () => { if (st.dead) { st = newStickman(); started = true; dist = 0; return } started = true; st.jumpReq = true }
   const key = (e) => { if (e.code === 'Space' || e.key === ' ' || e.key === 'ArrowUp') { e.preventDefault(); jump() } }
   canvas.addEventListener('pointerdown', jump); canvas.addEventListener('keydown', key); document.addEventListener('keydown', key)
+  const rr = (x, y, w, hh, r) => { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + hh, r); ctx.arcTo(x + w, y + hh, x, y + hh, r); ctx.arcTo(x, y + hh, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath() }
+  const hill = (off, amp, base, color, k) => { ctx.fillStyle = color; ctx.beginPath(); ctx.moveTo(0, GROUND); for (let x = 0; x <= W; x += 14) ctx.lineTo(x, base - amp * Math.sin((x + off) / k) - amp * .5 * Math.sin((x + off) / (k * .43))); ctx.lineTo(W, GROUND); ctx.closePath(); ctx.fill() }
   const draw = () => {
-    ctx.clearRect(0, 0, W, H); ctx.fillStyle = '#15102B'; ctx.fillRect(0, 0, W, H)
-    ctx.strokeStyle = '#6B46F5'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(0, GROUND + .5); ctx.lineTo(W, GROUND + .5); ctx.stroke()
-    ctx.fillStyle = '#F5B83D'; for (const o of st.obs) ctx.fillRect(o.x, GROUND - o.h, o.w, o.h)
-    const x = 60, y = GROUND - st.y, run = Math.sin(st.t * 18) * 8
-    ctx.strokeStyle = st.dead ? '#e5334b' : '#fff'; ctx.lineWidth = 3; ctx.lineCap = 'round'
-    ctx.beginPath(); ctx.arc(x, y - 40, 7, 0, Math.PI * 2); ctx.moveTo(x, y - 33); ctx.lineTo(x, y - 14)           // head, body
-    ctx.moveTo(x, y - 28); ctx.lineTo(x + 10 + run / 2, y - 20); ctx.moveTo(x, y - 28); ctx.lineTo(x - 10 - run / 2, y - 20)  // arms
-    ctx.moveTo(x, y - 14); ctx.lineTo(x + 8 + (st.y ? 4 : run), y); ctx.moveTo(x, y - 14); ctx.lineTo(x - 8 - (st.y ? 4 : run), y) // legs
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    const sky = ctx.createLinearGradient(0, 0, 0, GROUND); sky.addColorStop(0, '#0f0a26'); sky.addColorStop(1, '#2a1c62')
+    ctx.fillStyle = sky; ctx.fillRect(0, 0, W, H)
+    ctx.fillStyle = '#fff'; for (const s of stars) { ctx.globalAlpha = .35 + .35 * Math.sin(st.t * 2 + s.x); ctx.beginPath(); ctx.arc((s.x - dist * .05 % W + W) % W, s.y, s.r, 0, 7); ctx.fill() } ctx.globalAlpha = 1
+    hill(dist * .12, 14, 150, '#2b1f66', 70); hill(dist * .3, 12, 168, '#3a2a86', 52)
+    const gg = ctx.createLinearGradient(0, GROUND, 0, H); gg.addColorStop(0, '#4c35b8'); gg.addColorStop(1, '#241a5c')
+    ctx.fillStyle = gg; ctx.fillRect(0, GROUND, W, H - GROUND)
+    ctx.strokeStyle = '#8f78ff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(0, GROUND + 1); ctx.lineTo(W, GROUND + 1); ctx.stroke()
+    ctx.strokeStyle = 'rgba(255,255,255,.14)'; ctx.lineWidth = 2; ctx.beginPath(); for (let x = -(dist % 40); x < W; x += 40) { ctx.moveTo(x, GROUND + 14); ctx.lineTo(x + 14, GROUND + 14) } ctx.stroke()
+    for (const o of st.obs) {                                        // crates
+      const g2 = ctx.createLinearGradient(0, GROUND - o.h, 0, GROUND); g2.addColorStop(0, '#ffd166'); g2.addColorStop(1, '#e09a1f')
+      ctx.fillStyle = g2; rr(o.x, GROUND - o.h, o.w, o.h, 4); ctx.fill(); ctx.strokeStyle = 'rgba(90,50,0,.55)'; ctx.lineWidth = 1.5; ctx.stroke()
+    }
+    const x = 60, y = GROUND - st.y, run = Math.sin(st.t * 18) * 9, air = st.y > 0
+    ctx.fillStyle = 'rgba(0,0,0,.28)'; ctx.beginPath(); ctx.ellipse(x, GROUND + 3, 11 - Math.min(5, st.y / 14), 3, 0, 0, 7); ctx.fill()
+    ctx.strokeStyle = st.dead ? '#ff5d73' : '#fff'; ctx.lineWidth = 3.2; ctx.lineCap = 'round'; ctx.lineJoin = 'round'
+    ctx.beginPath(); ctx.arc(x, y - 40, 7, 0, Math.PI * 2); ctx.moveTo(x, y - 33); ctx.lineTo(x, y - 14)
+    const swing = air ? 9 : run
+    ctx.moveTo(x, y - 28); ctx.lineTo(x + 10 + swing / 2, y - (air ? 33 : 20)); ctx.moveTo(x, y - 28); ctx.lineTo(x - 10 - swing / 2, y - (air ? 33 : 20))
+    ctx.moveTo(x, y - 14); ctx.lineTo(x + 8 + (air ? 5 : swing), y - (air ? 4 : 0)); ctx.moveTo(x, y - 14); ctx.lineTo(x - 8 - (air ? 5 : swing), y - (air ? 8 : 0))
     ctx.stroke()
-    ctx.fillStyle = '#fff'; ctx.font = '600 16px sans-serif'; ctx.fillText(`Score ${st.score}`, 12, 24); ctx.fillText(`Best ${Math.max(best.get('stick'), st.score)}`, W - 100, 24)
-    if (!started) { ctx.textAlign = 'center'; ctx.fillText('Tap to start', W / 2, 80); ctx.textAlign = 'left' }
-    if (st.dead) { ctx.textAlign = 'center'; ctx.fillText('Ouch. Tap to try again', W / 2, 80); ctx.textAlign = 'left' }
+    ctx.fillStyle = '#fff'; ctx.font = '700 16px system-ui, sans-serif'; ctx.textAlign = 'left'; ctx.fillText(`Score ${st.score}`, 14, 26)
+    ctx.textAlign = 'right'; ctx.fillText(`Best ${Math.max(best.get('stick'), st.score)}`, W - 14, 26)
+    ctx.textAlign = 'center'; ctx.font = '700 18px system-ui, sans-serif'
+    if (!started) ctx.fillText('Tap to start', W / 2, 84)
+    if (st.dead) ctx.fillText('Ouch! Tap to try again', W / 2, 84)
+    ctx.textAlign = 'left'
   }
   const loop = (ts) => {
     const dt = Math.min(.05, (ts - (last || ts)) / 1000); last = ts
-    if (started && !st.dead) { stickmanStep(st, dt); if (st.dead) best.set('stick', Math.max(best.get('stick'), st.score)) }
+    if (started && !st.dead) { stickmanStep(st, dt); dist += st.speed * dt; if (st.dead) best.set('stick', Math.max(best.get('stick'), st.score)) }
     draw(); raf = requestAnimationFrame(loop)
   }
   raf = requestAnimationFrame(loop)

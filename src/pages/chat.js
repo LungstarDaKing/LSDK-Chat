@@ -1,5 +1,7 @@
+import '../games.css'
+import '../polish.css'
 import { supabase } from '../lib/supabase.js'
-import { h, clear, toast, dialog, confirmDialog, debounce, friendlyError } from '../lib/dom.js'
+import { h, clear, toast, dialog, confirmDialog, debounce, friendlyError, reconcile } from '../lib/dom.js'
 import { CONFIG } from '../config.js'
 import { state, go } from '../lib/state.js'
 import { ACCEPT, kind, fmtSize, uploadAttachment, removeFiles, signedUrls, signedUrl, listFiles, resolveType } from '../lib/media.js'
@@ -23,9 +25,10 @@ import { getA11y } from '../lib/a11y.js'
 import { icon } from '../ui/icons.js'
 import { GroupCallManager, supabaseGroupApi } from '../lib/group-calls.js'
 import { GroupCallOverlay } from '../ui/group-call-ui.js'
+import { GamesController } from '../ui/games-ui.js'
+import { WatchController } from '../ui/watch-ui.js'
 import { LunexClient, chatContext } from '../lib/lunex.js'
 import { LunexPanel } from '../ui/lunex-ui.js'
-import { GamesController } from '../ui/games-ui.js'
 import { loadNicknames, watchNicknames, onNicknames, nickOf, nickFor } from '../lib/nicknames.js'
 import logoUrl from '../assets/logo.svg'
 
@@ -34,10 +37,17 @@ const MAX_LEN = 1000
 const MSG_COLS = '*'          // all columns, so newer columns (status_label, v0.9) never break an older database
 
 let chat = null
-export function teardownChat() { if (chat) chat.destroy(); chat = null }
+// Leaving the chat screen (Tools, Settings, Profile) must not end a call or a watch-together session.
+// While one is running the chat is only set aside (hidden) and picked up again when you come back.
+export function teardownChat(force = false) {
+  if (chat && !force && chat.isLive()) { chat.detached = true; return }
+  if (chat) chat.destroy()
+  chat = null
+}
 export function renderChat(root, roomId, msgId = null) {
-  if (!chat || !root.contains(chat.el)) {
-    teardownChat()
+  if (chat?.detached) { chat.detached = false; clear(root).append(chat.el) }
+  else if (!chat || !root.contains(chat.el)) {
+    teardownChat(true)
     chat = new Chat(root)
   }
   chat.open(roomId, msgId)
@@ -141,6 +151,7 @@ class Chat {
     this.paneAvatar = h('span', { class: 'avatar sm' })
     this.games = new GamesController(this)
     this.lunexBtn = h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Ask LUNEX about this chat', title: 'Ask LUNEX / summarize this chat', hidden: !this.lunexPanel, onclick: () => this.askLunexAboutChat() }, icon('sparkle'))
+    this.watch = new WatchController(this)
     this.voiceCallBtn = h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Voice call', title: 'Voice call', onclick: () => this.callRoom('voice') }, icon('phone'))
     this.videoCallBtn = h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Video call', title: 'Video call', onclick: () => this.callRoom('video') }, icon('video'))
     this.infoBtn = h('button', { class: 'btn icon ghost', type: 'button', 'aria-label': 'Chat info', title: 'Chat info', onclick: () => this.openInfo() }, icon('info'))
@@ -195,8 +206,8 @@ class Chat {
       h('header', { class: 'pane-head' },
         h('button', { class: 'btn icon ghost back', type: 'button', 'aria-label': 'Back to chats', onclick: () => go('#/chat') }, icon('back')),
         this.paneAvatar,
-        h('div', { class: 'pane-titles' }, this.paneTitle, this.paneSub), this.lunexBtn, this.voiceCallBtn, this.videoCallBtn, this.games.btn, this.infoBtn),
-      this.callBanner, this.games.banner, this.thread, this.composer)
+        h('div', { class: 'pane-titles' }, this.paneTitle, this.paneSub), this.lunexBtn, this.voiceCallBtn, this.videoCallBtn, this.watch.btn, this.games.btn, this.infoBtn),
+      this.callBanner, this.games.banner, this.watch.banner, this.thread, this.composer)
     // drag & drop a file onto the conversation
     this.pane.addEventListener('dragover', (e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault() })
     this.pane.addEventListener('drop', (e) => {
@@ -291,18 +302,31 @@ class Chat {
     document.addEventListener('keydown', this.onKey)
   }
 
+  // "Watch together" from the call screen: open the player in the chat you have with the person you are talking to
+  watchWith(peerId) {
+    const r = this.rooms.find((x) => x.is_direct && !x.notes_owner && x.participants.some((p) => p.profile_id === peerId))
+    if (!r) return toast('Open a chat with them first.')
+    this.watch.setRoom(r); this.watch.btn.hidden = false
+    this.watch.open()
+  }
+  // a call or a shared player is running
+  isLive() { return !!this.alive && ((this.calls && this.calls.s.phase !== 'idle') || (this.gcalls && this.gcalls.s.phase !== 'idle') || !!this.watch?.active) }
+  // once whatever kept a set-aside chat alive has ended, let it go
+  releaseIfDone() { if (this.detached && !this.isLive()) teardownChat(true) }
+
   destroy() {
     this.stopDictation()
     this.alive = false
     this.unNick?.()
     this.games?.destroy()
+    this.watch?.destroy()
+    this.lunexPanel?.close()
     clearInterval(this.poll)
     document.removeEventListener('visibilitychange', this.onVis)
     document.removeEventListener('keydown', this.onKey)
     if (this.channel) supabase.removeChannel(this.channel)
     this.events?.leave()
     this.rec?.cancel()
-    this.lunexPanel?.close()
     this.calls?.hangup?.()
     this.calls?.destroy()
     clearTimeout(this.bannerT)
@@ -354,6 +378,7 @@ class Chat {
     try { await this.gcalls.join(callId) } catch (e) { toast(friendlyError(e), 'error') }
   }
   onGroupCallEnded({ reason, message }) {
+    setTimeout(() => this.releaseIfDone(), 0)
     if (message) toast(message, reason === 'error' ? 'error' : 'info')
     else if (reason === 'ended') toast('Call ended')
     if (this.tab === 'calls' && this.alive) renderCalls(this.callsView, this)
@@ -373,6 +398,7 @@ class Chat {
     this.callBanner.hidden = false
   }
   onCallEnded({ reason, message }) {
+    setTimeout(() => this.releaseIfDone(), 0)
     if (message && reason !== 'ended') toast(message, reason === 'error' ? 'error' : 'info')
     else if (reason === 'ended') toast('Call ended')
     if (this.tab === 'calls' && this.alive) renderCalls(this.callsView, this)
@@ -438,13 +464,14 @@ class Chat {
     return el
   }
   async hydrateAvatars(scope) {
-    const els = [...scope.querySelectorAll('[data-avatar]')]
+    const els = [...scope.querySelectorAll('[data-avatar]:not([data-ready])')]
     if (!els.length) return
     const urls = await signedUrls('avatars', els.map((e) => e.dataset.avatar))
     if (!this.alive) return
     for (const el of els) {
       const url = urls.get(el.dataset.avatar)
       if (!url || el.querySelector('img')) continue
+      el.dataset.ready = '1'
       const img = h('img', { src: url, alt: '', loading: 'lazy', referrerPolicy: 'no-referrer' })
       img.addEventListener('load', () => { el.textContent = ''; el.append(img) }, { once: true })
     }
@@ -539,19 +566,28 @@ class Chat {
     this.lunexPanel.summarize(this.title(r), chatContext(msgs, (id) => this.nameOf(id)))
   }
 
+  lunexRowCached() {
+    if (!this.lunexPanel || this.filter !== 'all') return null
+    const sig = String(this.lunexPanel.preview())
+    if (!this.lunexLi || this.lunexLi.sig !== sig) this.lunexLi = { sig, el: this.lunexRow() }
+    return this.lunexLi.el
+  }
+
   renderRooms() {
-    clear(this.roomList)
+    const lunexLi = this.lunexRowCached()
     let total = 0
     for (const n of this.unread.values()) total += n
     for (const id of this.flags) if (!this.unread.has(id) && id !== this.currentId) total += 1
     this.badges.chats.textContent = total > 99 ? '99+' : String(total || '')
     this.badges.chats.hidden = !total
     if (!this.roomsLoaded) {
+      clear(this.roomList)
       for (let i = 0; i < 7; i++) this.roomList.append(h('li', { class: 'sk-row', 'aria-hidden': 'true' }, h('i', { class: 'sk sk-av' }), h('span', { class: 'sk-lines' }, h('i', { class: 'sk' }), h('i', { class: 'sk short' }))))
       return
     }
-    if (this.lunexPanel && this.filter === 'all') this.roomList.append(this.lunexRow())
     if (!this.rooms.length) {
+      clear(this.roomList)
+      if (lunexLi) this.roomList.append(lunexLi)
       this.roomList.append(h('li', { class: 'room-empty' }, h('img', { class: 'empty-logo sm', src: logoUrl, alt: '', width: 72, height: 72 }), h('h2', {}, 'No chats yet'),
         h('p', { class: 'small' }, 'Start a conversation with a friend, or make a group.'),
         h('div', { class: 'row center-row' }, h('button', { class: 'btn primary', type: 'button', onclick: () => this.newDirect() }, icon('compose', 18), 'New chat'), h('button', { class: 'btn', type: 'button', onclick: () => this.newGroup() }, icon('users', 18), 'New group'))))
@@ -559,26 +595,42 @@ class Chat {
     }
     const shown = this.rooms.filter((r) => this.filter === 'unread' ? (this.unread.get(r.id) || this.flags.has(r.id)) : this.filter === 'groups' ? !r.is_direct : true)
     if (!shown.length) {
+      clear(this.roomList)
+      if (lunexLi) this.roomList.append(lunexLi)
       this.roomList.append(h('li', { class: 'room-empty' }, h('p', {}, this.filter === 'unread' ? 'You are all caught up.' : 'No groups yet.'), h('button', { class: 'linkish', type: 'button', onclick: () => this.setFilter('all') }, 'Show all chats')))
       return
     }
+    const cache = this.roomCache || (this.roomCache = new Map())
+    const nodes = lunexLi ? [lunexLi] : [], keep = new Set()
     for (const r of shown) {
       const n = this.unread.get(r.id) || 0
       const flagged = this.flags.has(r.id) && r.id !== this.currentId
       const when = this.previews.get(r.id)?.created_at || r.last_message_at
-      let held = false
-      const link = h('a', { class: `room-item${r.id === this.currentId ? ' active' : ''}${n || flagged ? ' unread' : ''}${flagged ? ' flagged' : ''}`, href: `#/chat/${r.id}`, 'aria-current': r.id === this.currentId ? 'true' : null,
-          onclick: (e) => { if (held) { e.preventDefault(); held = false } } },
-        this.roomAvatar(r, 'md'),
-        h('span', { class: 'room-meta' },
-          h('span', { class: 'room-top' }, h('span', { class: 'room-name' }, this.title(r)), when && h('time', { class: 'room-time', datetime: when }, listTime(when))),
-          h('span', { class: 'room-bottom' }, h('span', { class: 'room-sub' }, this.roomPreview(r)),
-            n > 0 && h('span', { class: 'count', 'aria-label': `${n} unread` }, n > 99 ? '99+' : n),
-            !n && flagged && h('span', { class: 'count dot', 'aria-label': 'Marked as unread' }, '•'))))
-      attachHold(link, () => { held = true; setTimeout(() => { held = false }, 700); this.roomMenu(r) })
-      this.roomList.append(h('li', { class: 'room-li' }, link,
-        h('button', { class: 'room-more', type: 'button', 'aria-label': `Options for ${this.title(r)}`, onclick: () => this.roomMenu(r) }, icon('down', 16))))
+      const peer = this.peerOf(r), pv = this.previews.get(r.id)
+      // only rows whose content really changed are rebuilt; the rest keep their DOM (and their loaded avatar)
+      const sig = [r.id, this.title(r), when && listTime(when), n, flagged, r.id === this.currentId, r.id !== this.currentId ? getDraft(r.id) : '',
+        pv?.content, pv?.sender_id, pv?.attachment_name, pv?.attachment_type, r.is_direct ? describeStatus(this.status.get(peer)) : '', r.participants.length,
+        peer ? this.status.get(peer)?.online : '', peer ? this.people.get(peer)?.avatar_path : '', peer ? this.nameOf(peer) : '', r.notes_owner].join('\u0001')
+      let c = cache.get(r.id)
+      if (!c || c.sig !== sig) {
+        let held = false
+        const link = h('a', { class: `room-item${r.id === this.currentId ? ' active' : ''}${n || flagged ? ' unread' : ''}${flagged ? ' flagged' : ''}`, href: `#/chat/${r.id}`, 'aria-current': r.id === this.currentId ? 'true' : null,
+            onclick: (e) => { if (held) { e.preventDefault(); held = false } } },
+          this.roomAvatar(r, 'md'),
+          h('span', { class: 'room-meta' },
+            h('span', { class: 'room-top' }, h('span', { class: 'room-name' }, this.title(r)), when && h('time', { class: 'room-time', datetime: when }, listTime(when))),
+            h('span', { class: 'room-bottom' }, h('span', { class: 'room-sub' }, this.roomPreview(r)),
+              n > 0 && h('span', { class: 'count', 'aria-label': `${n} unread` }, n > 99 ? '99+' : n),
+              !n && flagged && h('span', { class: 'count dot', 'aria-label': 'Marked as unread' }, '•'))))
+        attachHold(link, () => { held = true; setTimeout(() => { held = false }, 700); this.roomMenu(r) })
+        const li = h('li', { class: 'room-li' }, link,
+          h('button', { class: 'room-more', type: 'button', 'aria-label': `Options for ${this.title(r)}`, onclick: () => this.roomMenu(r) }, icon('down', 16)))
+        c = { sig, el: li }; cache.set(r.id, c)
+      }
+      keep.add(r.id); nodes.push(c.el)
     }
+    for (const k of [...cache.keys()]) if (!this.rooms.some((x) => x.id === k)) cache.delete(k)
+    reconcile(this.roomList, nodes)
     this.hydrateAvatars(this.roomList)
   }
 
@@ -597,6 +649,7 @@ class Chat {
     this.voiceCallBtn.hidden = this.videoCallBtn.hidden = !!r.notes_owner || !this.calls
     this.refreshCallBannerSoon()
     this.games.setRoom(r)
+    this.watch.setRoom(r)
     const fresh = this.roomAvatar(r, 'sm')
     this.paneAvatar.replaceWith(fresh); this.paneAvatar = fresh
     if (peer) { fresh.classList.add('clickable'); fresh.onclick = () => this.showProfile(peer) }
@@ -639,6 +692,7 @@ class Chat {
     if (this.flags.has(roomId)) { this.flags.delete(roomId); setMarkedUnread(roomId, false).catch(() => {}) }
     this.editingId = null
     this.messages = []
+    this.rowCache = new Map()
     this.reads = new Map()
     this.players.clear()
     this.reactions = new Map()
@@ -686,7 +740,8 @@ class Chat {
     await this.ensurePeople(data.map((m) => m.sender_id))
     await this.fetchReplyTargets(data)
     const el = this.messagesEl, prev = el.scrollHeight
-    this.renderMessages(false)
+    this.prepending = true
+    try { this.renderMessages(false) } finally { this.prepending = false }
     el.scrollTop = el.scrollHeight - prev
   }
 
@@ -694,13 +749,14 @@ class Chat {
   renderMessages(scrollDown) {
     const el = this.messagesEl
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120
-    clear(el)
-    if (this.hasMore) el.append(h('button', { class: 'btn small center', type: 'button', onclick: () => this.loadOlder() }, 'Load earlier messages'))
+    const cache = this.rowCache || (this.rowCache = new Map())
+    const firstPaint = cache.size === 0
+    const nodes = []
+    if (this.hasMore) nodes.push(this.moreBtn || (this.moreBtn = h('button', { class: 'btn small center', type: 'button', onclick: () => this.loadOlder() }, 'Load earlier messages')))
     if (this.loadingMsgs && !this.messages.length) {
-      for (const [own, w] of [[0, 52], [0, 38], [1, 44], [0, 64], [1, 30]]) el.append(h('div', { class: `msg-row ${own ? 'own' : 'other'} sk-msg`, 'aria-hidden': 'true' }, h('i', { class: 'sk', dataset: { w } })))
-      el.querySelectorAll('.sk-msg .sk').forEach((n) => { n.style.width = n.dataset.w + '%' })
+      for (const [own, w] of [[0, 52], [0, 38], [1, 44], [0, 64], [1, 30]]) { const sk = h('i', { class: 'sk', dataset: { w } }); sk.style.width = w + '%'; nodes.push(h('div', { class: `msg-row ${own ? 'own' : 'other'} sk-msg`, 'aria-hidden': 'true' }, sk)) }
     } else if (!this.messages.length && !this.hasMore) {
-      el.append(h('div', { class: 'thread-empty' }, h('span', { class: 'te-ico' }, icon('chat', 30)), h('strong', {}, 'No messages yet'), h('span', { class: 'small' }, 'Say hello - it only takes one message to start.')))
+      nodes.push(h('div', { class: 'thread-empty' }, h('span', { class: 'te-ico' }, icon('chat', 30)), h('strong', {}, 'No messages yet'), h('span', { class: 'small' }, 'Say hello - it only takes one message to start.')))
     }
     const r = this.room(); const iAmAdmin = this.myRole(r) === 'admin'
     this.lastSeenId = null
@@ -708,29 +764,72 @@ class Chat {
       if (m.sender_id !== this.me.id) continue
       if (r?.participants.some((p) => p.profile_id !== this.me.id && this.reads.get(p.profile_id) >= new Date(m.created_at))) this.lastSeenId = m.id
     }
+    const dm = !!r?.is_direct
+    const seen = new Set()
     let prev = null
     for (const m of this.messages) {
-      if (!prev || !sameDay(prev.created_at, m.created_at)) el.append(h('div', { class: 'day' }, fmtDay(m.created_at)))
-      el.append(this.messageEl(m, m.sender_id === this.me.id, iAmAdmin, prev && prev.sender_id === m.sender_id && sameDay(prev.created_at, m.created_at)))
+      const key = m._key || m.id
+      const newDay = !prev || !sameDay(prev.created_at, m.created_at)
+      if (newDay) {
+        const dk = 'day:' + new Date(m.created_at).toDateString()
+        let d = cache.get(dk); if (!d) { d = { el: h('div', { class: 'day' }, fmtDay(m.created_at)) }; cache.set(dk, d) }
+        seen.add(dk); nodes.push(d.el)
+      }
+      const own = m.sender_id === this.me.id
+      const grouped = !!(prev && prev.sender_id === m.sender_id && !newDay)
+      // structural signature: when it changes the bubble is rebuilt; otherwise the existing element is reused as it is
+      const sig = [m.id, m.content, m.edited_at, m._pending, m._failed, m.attachment_path, m.status_label, m.reply_to, own, iAmAdmin, grouped, dm,
+        this.editingId === m.id, !own && !grouped && !dm ? this.nameOf(m.sender_id) : '', m.reply_to ? this.quoteSig(m) : ''].join('\u0001')
+      const dyn = this.dynSig(m)
+      let c = cache.get(key)
+      if (!c || c.sig !== sig) {
+        const row = this.messageEl(m, own, iAmAdmin, grouped)
+        if (!c && !firstPaint && !this.prepending) row.classList.add('enter')      // only brand-new messages animate in
+        c = { sig, dyn, el: row }; cache.set(key, c)
+      } else if (c.dyn !== dyn) {
+        c.dyn = dyn; this.paintDynamic(c.el, m)
+      }
+      seen.add(key); nodes.push(c.el)
       prev = m
     }
-    if (this.typers.size) el.append(this.typingRow)
+    for (const k of [...cache.keys()]) if (!seen.has(k)) cache.delete(k)
+    if (this.typers.size) nodes.push(this.typingRow)
+    reconcile(el, nodes)
     this.stick = !!(scrollDown || nearBottom)
     if (this.stick) { el.scrollTop = el.scrollHeight; this.newBelow = 0 }
     this.syncJump()
     this.hydrateAttachments(el)
   }
 
+  quoteSig(m) {
+    const t = this.replyCache.get(m.reply_to) ?? this.messages.find((x) => x.id === m.reply_to)
+    return t ? `${t.sender_id}|${this.previewOf(t)}|${t.sender_id === this.me.id ? '' : this.nameOf(t.sender_id)}` : 'gone'
+  }
+  // things that change often (ticks, reactions) are updated inside the existing bubble instead of rebuilding it
+  dynSig(m) {
+    const r = this.room()
+    const readers = r ? r.participants.filter((p) => p.profile_id !== this.me.id && this.reads.get(p.profile_id) >= new Date(m.created_at)).length : 0
+    const reacts = summarize(this.reactions.get(m.id)).map((x) => `${x.emoji}${x.count}${x.users.includes(this.me.id) ? '*' : ''}`).join(',')
+    return `${readers}|${m.id === this.lastSeenId}|${reacts}`
+  }
+  paintDynamic(row, m) {
+    const bubble = row.querySelector('.bubble'); if (!bubble) return
+    const tick = bubble.querySelector('.tick-slot'); if (tick) { clear(tick); tick.append(this.ticks(m)) }
+    const slot = bubble.querySelector('.react-slot')
+    if (slot) { clear(slot); const rx = this.reactionsEl(m); if (rx) slot.append(rx); bubble.classList.toggle('has-react', !!rx) }
+  }
+
   // Fill in photos / video / audio once their temporary links are ready.
   async hydrateAttachments(scope) {
-    const els = [...scope.querySelectorAll('[data-attach]')]
+    const els = [...scope.querySelectorAll('[data-attach]:not([data-ready])')]
     if (!els.length) return
+    for (const e of els) e.dataset.ready = '1'
     const room = this.currentId
     const urls = await signedUrls('media', els.map((e) => e.dataset.attach))
     if (!this.alive || room !== this.currentId) return
     for (const el of els) {
       const url = urls.get(el.dataset.attach)
-      if (!url) { el.textContent = 'Could not load this file.'; continue }
+      if (!url) { el.textContent = 'Could not load this file.'; delete el.dataset.ready; continue }
       const type = el.dataset.type
       const k = kind(type)
       el.textContent = ''
@@ -779,6 +878,10 @@ class Chat {
   messageEl(m, own, iAmAdmin, grouped) {
     const editing = this.editingId === m.id
     let body
+    // the time + ticks sit at the end of the last line of text (like WhatsApp / Telegram) instead of taking a line of their own
+    const inlineFoot = !editing && !m.attachment_path && !!m.content
+    const foot = h('div', { class: 'foot' }, fmtTime(m.created_at), m.edited_at && ' · edited', own && h('span', { class: 'tick-slot' }, this.ticks(m)))
+    const reacts = this.reactionsEl(m)
     if (editing) {
       const ta = h('textarea', { class: 'edit-input', maxLength: MAX_LEN, rows: 2, 'aria-label': 'Edit message' }, '')
       ta.value = m.content
@@ -801,7 +904,7 @@ class Chat {
         h('button', { class: 'btn small', type: 'button', onclick: () => { this.editingId = null; this.renderMessages(false) } }, 'Cancel'))]
       setTimeout(() => ta.focus(), 0)
     } else {
-      body = [m.attachment_path && this.attachmentEl(m), m.content && h('div', { class: 'text' }, m.content)]   // text only: safe against HTML injection
+      body = [m.attachment_path && this.attachmentEl(m), m.content && h('div', { class: 'text' }, m.content, inlineFoot ? foot : null)]   // text only: safe against HTML injection
     }
     const live = !m._pending && !m._failed
     const tool = (ico, label, fn) => h('button', { class: 'ma-btn', type: 'button', title: label, 'aria-label': label, onclick: fn }, icon(ico, 16))
@@ -813,13 +916,13 @@ class Chat {
     const failBar = m._failed ? h('div', { class: 'failbar', role: 'alert' }, h('span', {}, 'Not sent'),
       h('button', { class: 'linkish', type: 'button', onclick: () => this.retrySend(m) }, 'Retry'),
       h('button', { class: 'linkish', type: 'button', onclick: () => this.dropPending(m) }, 'Delete')) : null
-    const bubble = h('div', { class: `bubble${m._pending ? ' pending' : ''}${m._failed ? ' failed' : ''}` },
+    const bubble = h('div', { class: `bubble${m._pending ? ' pending' : ''}${m._failed ? ' failed' : ''}${reacts ? ' has-react' : ''}` },
         m.status_label && h('div', { class: 'status-ref' }, icon('status', 14), h('span', {}, own ? `Your reply to a status · ${m.status_label.replace(/^Status:? ?/, '') || 'status'}` : `Replied to your status · ${m.status_label.replace(/^Status:? ?/, '') || ''}`)),
         this.quoteEl(m),
         !grouped && !own && !dm && h('div', { class: `meta nm-${colourOf(m.sender_id)}` }, h('button', { class: 'linkish plain', type: 'button', onclick: () => this.showProfile(m.sender_id) }, this.nameOf(m.sender_id))),
         body,
-        this.reactionsEl(m),
-        h('div', { class: 'foot' }, fmtTime(m.created_at), m.edited_at && ' · edited', own && this.ticks(m)),
+        h('div', { class: 'react-slot' }, reacts),
+        inlineFoot ? null : foot,
         failBar,
         actions)
     if (!editing && live) {
@@ -974,7 +1077,7 @@ class Chat {
       if (this.messages.some((x) => x.id === m.id)) { this.touchRoom(m); return }
       if (mine) {                                                   // the real copy of a message we are still sending
         const t = this.messages.findIndex((x) => x._pending && x.content === (m.content || '') && (x.reply_to || null) === (m.reply_to || null))
-        if (t >= 0) { this.messages[t] = m; this.touchRoom(m); this.renderMessages(false); return }
+        if (t >= 0) { m._key = this.messages[t]._key || this.messages[t].id; this.messages[t] = m; this.touchRoom(m); this.renderMessages(false); return }
       }
       await this.ensurePeople([m.sender_id])
       await this.fetchReplyTargets([m])
@@ -1110,7 +1213,7 @@ class Chat {
     }
     if (i >= 0) {
       if (this.messages.some((x) => x.id === data.id)) this.messages.splice(i, 1)      // realtime echo got there first
-      else this.messages[i] = data
+      else { data._key = this.messages[i]._key || this.messages[i].id; this.messages[i] = data }
     }
     this.replyCache.set(data.id, data)
     this.touchRoom(data)

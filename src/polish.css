@@ -1,0 +1,27 @@
+/* ==========================================================================
+   Polish layer: chat bubbles, lists, motion and performance. Loaded last.
+   ========================================================================== */
+/* time + ticks sit at the end of the last line of text, like WhatsApp / Telegram */
+.bubble .text { overflow-wrap: anywhere; }
+.bubble .text .foot { float: right; margin: .42rem 0 -.18rem .7rem; line-height: 1; align-items: flex-end; }
+.bubble.has-react .text .foot { margin-top: .5rem; }
+.bubble .foot .tick-slot { display: inline-flex; align-items: center; }
+.react-slot { display: contents; }
+.bubble::after { content: ''; display: table; clear: both; }    /* contain the floated time */
+/* date chips stay visible while scrolling and no longer use a blur layer each */
+.day { position: sticky; top: .45rem; z-index: 3; backdrop-filter: none; -webkit-backdrop-filter: none; background: color-mix(in srgb, var(--surface) 92%, transparent); }
+/* smoother scrolling and cheaper repaints */
+.messages { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; scroll-behavior: auto; }
+.msg-row { contain: layout style; }
+.attach.image { min-height: 120px; min-width: 160px; border-radius: 12px; background: var(--surface-2); overflow: hidden; }
+.attach.image img { display: block; max-width: 100%; height: auto; }
+.bubble img { transition: opacity .2s; }
+/* one consistent focus ring and tap feedback */
+button, [role="button"], .room-item, .game-card { -webkit-tap-highlight-color: transparent; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.btn { transition: transform .08s, background .15s, box-shadow .15s, opacity .15s; } .btn:active:not(:disabled) { transform: scale(.97); }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; scroll-behavior: auto !important; } }
+
+/* only brand-new messages pop in (the old rule animated every bubble on every update) */
+.msg-row:not(.typing-row):not(.enter):not(.flash) .bubble { animation: none; }
+.reaction { animation: none; transition: transform .12s, background .15s; } .reaction:active { transform: scale(.94); }

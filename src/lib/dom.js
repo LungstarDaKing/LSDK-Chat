@@ -22,6 +22,18 @@ function append(el, children) {
 }
 export const clear = (el) => { while (el.firstChild) el.removeChild(el.firstChild); return el }
 
+// Puts `nodes` into `parent` in this order, touching the DOM only where something actually changed. Nodes that are
+// already in the right place are left alone (so images, audio players and scroll position are not disturbed).
+export function reconcile(parent, nodes) {
+  let cursor = parent.firstChild
+  for (const n of nodes) {
+    if (!n) continue
+    if (n === cursor) { cursor = cursor.nextSibling; continue }
+    parent.insertBefore(n, cursor)
+  }
+  while (cursor) { const next = cursor.nextSibling; parent.removeChild(cursor); cursor = next }
+}
+
 export function toast(message, kind = 'info') {
   let box = document.getElementById('toasts')
   if (!box) {
