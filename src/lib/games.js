@@ -7,6 +7,7 @@ export const VERSUS = {
   chess: { title: 'Chess', blurb: 'Full rules. The one who starts plays white.', secret: null },
   hangman: { title: 'Hangman', blurb: 'You pick a word, they guess it letter by letter.', secret: 'Type a word for them to guess (3 to 20 letters)' },
   darts: { title: 'Darts', blurb: '301, first to exactly zero. Three darts a turn.', secret: null },
+  race: { title: 'Car race', blurb: 'Pick a car and a real circuit. First across the line wins.', secret: null },
   twenty: { title: '20 Questions', blurb: 'You think of something. They have 20 yes/no questions.', secret: 'Think of a person, place or thing and type it. Only you can see it.' },
 }
 
@@ -17,6 +18,8 @@ export const gameApi = {
     ok(await supabase.rpc('game_move', { p_game: id, p_version: version, p_state: state, p_status: status, p_winner: winner, p_result: result })),
   guess: async (id, letter) => ok(await supabase.rpc('game_guess', { p_game: id, p_letter: letter })),
   resign: async (id) => ok(await supabase.rpc('game_resign', { p_game: id })),
+  raceSetup: async (id, o = {}) => ok(await supabase.rpc('race_setup', { p_game: id, p_car: o.car ?? null, p_color: o.color ?? null, p_map: o.map ?? null, p_laps: o.laps ?? null, p_balanced: o.balanced ?? null, p_ready: o.ready ?? null, p_start: !!o.start })),
+  raceFinish: async (id, winner, times) => ok(await supabase.rpc('race_finish', { p_game: id, p_winner: winner, p_times: times || {} })),
   secret: async (id) => ok(await supabase.rpc('game_secret', { p_game: id })),
   get: async (id) => ok(await supabase.from('games').select('*').eq('id', id).maybeSingle()),
   latest: async (room) => ok(await supabase.from('games').select('*').eq('room_id', room).order('created_at', { ascending: false }).limit(1).maybeSingle()),

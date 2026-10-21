@@ -3,6 +3,7 @@ import { h, clear, toast, dialog, friendlyError } from '../lib/dom.js'
 import { icon } from './icons.js'
 import { VERSUS, gameApi, tttPlay, tttWinner, twentyAsk, twentyAnswer, TWENTY_MAX, maskLetters, resultLine, dartScore, dartsPlay, BOARD_ORDER } from '../lib/games.js'
 import { SOLO } from '../games/solo.js'
+import { RaceController, openRaceChannel } from './race-ui.js'
 import { pieceSvg, markSvg, gallowsSvg, svgEl, dartElement } from './game-art.js'
 
 const START = { p: 8, n: 2, b: 2, r: 2, q: 1 }
@@ -14,7 +15,7 @@ export class GameSession {
   constructor(ctx, game) { this.ctx = ctx; this.game = game; this.me = ctx.me.id; this.sel = null; this.secret = null; this.dlg = null }
   open() {
     this.body = h('div', { class: 'game' })
-    this.dlg = dialog({ title: VERSUS[this.game.kind].title, body: this.body, wide: true, actions: [], onClose: () => { this.dead = true; this.stopLoop?.(); this.ctx.games?.sessionClosed(this) } })
+    this.dlg = dialog({ title: VERSUS[this.game.kind].title, body: this.body, wide: true, actions: [], onClose: () => { this.dead = true; this.stopLoop?.(); this.raceCtl?.destroy(); this.ctx.games?.sessionClosed(this) } })
     this.render(); this.loadSecret()
     return this
   }
@@ -41,6 +42,7 @@ export class GameSession {
     const g = this.game, nm = (id) => this.ctx.nameOf(id)
     if (g.status === 'done') return resultLine(g, this.me, nm)
     if (g.kind === 'hangman') return g.turn === this.me ? 'Pick a letter' : `${nm(g.turn)} is guessing your word`
+    if (g.kind === 'race') return this.raceCtl?.statusText() || 'Race lobby'
     return this.mine ? 'Your turn' : `Waiting for ${nm(g.turn)}`
   }
   render() {
@@ -48,7 +50,7 @@ export class GameSession {
     this.stopLoop?.(); this.stopLoop = null
     clear(this.body)
     this.body.append(h('p', { class: `g-status${this.mine ? ' mine' : ''}`, 'aria-live': 'polite' }, `vs ${this.ctx.nameOf(this.other())} · `, h('b', {}, this.statusText())))
-    const view = { ttt: () => this.ttt(), chess: () => this.chess(), hangman: () => this.hangman(), twenty: () => this.twenty(), darts: () => this.darts() }[g.kind]
+    const view = { ttt: () => this.ttt(), chess: () => this.chess(), hangman: () => this.hangman(), twenty: () => this.twenty(), darts: () => this.darts(), race: () => this.race() }[g.kind]
     this.body.append(view())
     this.body.append(h('div', { class: 'g-row' }, g.status === 'active'
       ? h('button', { class: 'btn small danger', type: 'button', onclick: () => this.act(() => gameApi.resign(g.id)) }, 'Give up')
@@ -59,6 +61,18 @@ export class GameSession {
     const k = this.game.kind, room = this.game.room_id
     this.dlg.close()
     this.ctx.games?.startGame(room, k)
+  }
+
+  /* --- car race --- */
+  race() {
+    if (!this.raceCtl) {
+      const id = this.game.id
+      this.raceCtl = new RaceController({ game: this.game, me: this.me, nameOf: (u) => this.ctx.nameOf(u), net: openRaceChannel,
+        api: { setup: (o) => gameApi.raceSetup(id, o), finish: (w, t) => gameApi.raceFinish(id, w, t) },
+        onError: (e) => toast(friendlyError(e), 'error'), onLeave: () => this.act(() => gameApi.resign(id)) })
+    }
+    this.raceCtl.sync(this.game)
+    return this.raceCtl.el
   }
 
   /* --- tic-tac-toe --- */
@@ -274,9 +288,9 @@ export class GamesController {
   }
   paint(g) {
     if (!g || g.room_id !== this.room?.id || g.status !== 'active') { this.banner.hidden = true; return }
-    const mine = g.turn === this.ctx.me.id
-    clear(this.banner).append(h('span', { class: 'cb-text' }, icon('game', 16), ` ${VERSUS[g.kind].title} · ${mine ? 'your turn' : `waiting for ${this.ctx.nameOf(g.turn)}`}`),
-      h('button', { class: 'btn primary small', type: 'button', onclick: () => this.openGame(g) }, mine ? 'Play' : 'Open'))
+    const mine = g.kind === 'race' || g.turn === this.ctx.me.id
+    clear(this.banner).append(h('span', { class: 'cb-text' }, icon('game', 16), ` ${VERSUS[g.kind].title} · ${g.kind === 'race' ? 'lobby open' : mine ? 'your turn' : `waiting for ${this.ctx.nameOf(g.turn)}`}`),
+      h('button', { class: 'btn primary small', type: 'button', onclick: () => this.openGame(g) }, g.kind === 'race' ? 'Join' : mine ? 'Play' : 'Open'))
     this.banner.hidden = false
   }
   openGame(g) { this.session?.dlg?.close(); this.session = new GameSession(this.ctx, g).open() }
