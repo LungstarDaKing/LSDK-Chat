@@ -3,7 +3,7 @@
 // page renders, validation works, and user-supplied text can never become HTML.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const ME = { id: 'u1', username: 'alice', bio: 'hello', avatar_path: null, terms_version: '2026-10-19', terms_accepted_at: new Date().toISOString(), created_at: new Date().toISOString() }
+const ME = { id: 'u1', username: 'alice', bio: 'hello', avatar_path: null, terms_version: '2026-10-22', terms_accepted_at: new Date().toISOString(), created_at: new Date().toISOString() }
 const fixtures = {
   profiles: [ME],
   rooms: [{ id: 'r1', name: 'Team', is_direct: false, last_message_at: new Date().toISOString(),
@@ -45,7 +45,7 @@ const flush = () => new Promise((r) => setTimeout(r, 20))
 beforeEach(() => { document.body.innerHTML = '<div id="app"></div>'; window.__pwned = 0; calls.length = 0; vi.clearAllMocks() })
 
 describe('legal pages', () => {
-  it('render all three documents and flag missing operator details only when unfilled', async () => {
+  it('render all three documents and flag missing operator details', async () => {
     const { renderLegal } = await import('../src/pages/legal.js')
     const { operatorConfigured } = await import('../src/config.js')
     const root = document.getElementById('app')
@@ -53,6 +53,7 @@ describe('legal pages', () => {
       renderLegal(root, n, false)
       expect(root.querySelector('h1').textContent.length).toBeGreaterThan(5)
       expect(root.querySelectorAll('section').length).toBeGreaterThan(5)
+      // the warning only appears while src/config.js still has placeholders
       expect(root.textContent.includes('Operator details are not filled in')).toBe(!operatorConfigured())
     }
   })
@@ -74,7 +75,7 @@ describe('auth page', () => {
     root.querySelector('form').dispatchEvent(new Event('submit', { cancelable: true }))
     await flush()
     const arg = fakeSupabase.auth.signUp.mock.calls[0][0]
-    expect(arg.options.data).toEqual({ username: 'alice_1', terms_version: '2026-10-19' })
+    expect(arg.options.data).toEqual({ username: 'alice_1', terms_version: '2026-10-22' })
     expect(root.textContent).toMatch(/Check your email/)
   })
   it('login shows a generic message for bad credentials', async () => {
