@@ -4,12 +4,14 @@
 //   item and use a "3-2-1, press play" countdown.
 // The database (supabase/update-v0.13.sql) keeps the shared state and decides who may control.
 import { supabase } from './supabase.js'
+import { scanLink, deepScan, summarize } from './linkscan.js'
 
 export const PROVIDERS = {
   youtube: { name: 'YouTube', synced: true, embed: 'https://www.youtube-nocookie.com' },
   spotify: { name: 'Spotify', synced: false, embed: 'https://open.spotify.com' },
   apple: { name: 'Apple Music', synced: false, embed: 'https://embed.music.apple.com' },
   tiktok: { name: 'TikTok', synced: false, embed: 'https://www.tiktok.com' },
+  web: { name: 'Web link', synced: false, embed: '' },     // any other https link: inspected by lib/linkscan.js before it is ever opened
 }
 // the same checks the database makes
 export const ID_RULES = {
@@ -17,8 +19,11 @@ export const ID_RULES = {
   spotify: /^(track|album|playlist|episode|show|artist)\/[A-Za-z0-9]{10,30}$/,
   apple: /^\/[a-z]{2}\/(album|playlist|song|artist|music-video|station)\/[A-Za-z0-9_~%-]{1,100}(\/[A-Za-z0-9_~%-]{1,60}){0,2}(\?i=[0-9]{5,15})?$/,
   tiktok: /^[0-9]{5,25}$/,
+  web: /^https:\/\/[^\s<>"'`\\]{4,390}$/,
 }
-export const validMedia = (provider, id) => !!ID_RULES[provider]?.test(String(id || ''))
+export const validMedia = (provider, id) => !!ID_RULES[provider]?.test(String(id || '')) && (provider !== 'web' || scanLink(id).verdict !== 'blocked')
+// every address is checked again by each person's own browser before it is opened (never trust what the other side stored)
+export const deepCheck = (url) => deepScan(supabase, url)
 
 // Turns whatever link was pasted into { provider, id } or { error }.
 export function parseMediaLink(text) {
@@ -45,13 +50,18 @@ export function parseMediaLink(text) {
     const i = parts.indexOf('video'); const r = i >= 0 && ok('tiktok', parts[i + 1]); if (r) return r
   }
   if (host === 'vm.tiktok.com' || host === 'vt.tiktok.com' || (host === 'tiktok.com' && parts[0] === 't')) return { error: 'TikTok short links do not work. Open the video, tap Share, Copy link, and paste the long link that contains /video/ and a number.' }
-  return { error: 'That link is not supported. Paste a YouTube, Spotify, Apple Music or TikTok link.' }
+  if (/(^|\.)(youtube\.com|youtu\.be|youtube-nocookie\.com|spotify\.com|apple\.com|tiktok\.com)$/.test(host)) return { error: 'That link does not point to one video or song. Open the exact video, song or album and copy its link.' }
+  // any other link: inspect it first. Threats are refused here and never reach the other person.
+  const scan = scanLink(text)
+  if (scan.verdict === 'blocked') return { error: `This link was not opened. ${summarize(scan)}`, scan }
+  return { provider: 'web', id: scan.url, scan }
 }
 
 // the address that goes into the player frame (only built from a checked id, never from raw text)
 export function embedUrl(provider, id, { origin = '' } = {}) {
   if (!validMedia(provider, id)) return null
   const base = PROVIDERS[provider].embed
+  if (provider === 'web') { const sc = scanLink(id); return sc.verdict === 'blocked' ? null : sc.url }
   if (provider === 'youtube') return `${base}/embed/${id}?enablejsapi=1&playsinline=1&rel=0&origin=${encodeURIComponent(origin)}`
   if (provider === 'spotify') return `${base}/embed/${id}`
   if (provider === 'apple') return `${base}${id}`

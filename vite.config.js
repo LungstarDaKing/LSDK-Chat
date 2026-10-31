@@ -23,7 +23,9 @@ const csp = [
   "base-uri 'none'",
   "form-action 'none'",
   "object-src 'none'",
-  "frame-src 'none'",
+  // players for YouTube / Spotify / Apple Music / TikTok, plus "any link" in Watch together. A web page cannot be limited to a
+  // list of sites in advance, so https frames are allowed, but every link is inspected (src/lib/linkscan.js) before it is opened.
+  "frame-src https:",
 ].join('; ')
 
 export default defineConfig({

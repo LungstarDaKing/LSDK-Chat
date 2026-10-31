@@ -493,3 +493,12 @@ html[data-contrast='high'] .rail { background: #000; }
 .wp-status { margin: .5rem 0 .2rem; } .wp-actions, .wp-request { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; margin-top: .4rem; }
 .wp-request { background: var(--surface-2); padding: .4rem .6rem; border-radius: 10px; } .wp-help { padding-left: 1.1rem; margin: .6rem 0 0; }
 @media (max-width: 560px) { .watch-panel { top: 0; left: 0; right: 0; bottom: auto; width: 100%; max-width: 100%; border-radius: 0 0 18px 18px; padding-top: calc(.4rem + env(safe-area-inset-top)); max-height: 78vh; } .watch-panel.large { width: 100%; } .wp-head { cursor: default; } }
+
+/* watch together: any web link (inspected first) */
+.wp-frame.web { min-height: 220px; height: min(52vh, 420px); background: #fff; color: #111; }
+.wp-frame.web iframe { background: #fff; }
+.wp-webmsg { display: flex; flex-direction: column; gap: .4rem; align-items: flex-start; padding: 1rem; margin: 0; font-size: .92rem; background: var(--surface-2); color: var(--text); height: 100%; box-sizing: border-box; justify-content: center; }
+.wp-webmsg.danger { background: #3a1218; color: #ffd9de; } .wp-webmsg.warn { background: #3a2c10; color: #ffe9b8; }
+.wp-webmsg strong { font-size: 1rem; }
+.wp-webnote { margin: .35rem 0 0; color: var(--muted); } .wp-webnote a { color: var(--accent); }
+.wp-stage:has(.wp-frame.web) { background: var(--surface-2); }

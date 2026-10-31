@@ -6,7 +6,7 @@ export const armAccess = () => { armed = true }
 export const disarmAccess = () => { armed = false }
 export const consumeAccess = () => { const a = armed; armed = false; return a }
 
-const calm = () => matchMedia('(prefers-reduced-motion: reduce)').matches
+import { motionOn } from './motion.js'
 
 export function playAccessGranted(appName = 'LSDKChat') {
   if (document.querySelector('.access')) return
@@ -16,38 +16,36 @@ export function playAccessGranted(appName = 'LSDKChat') {
   el.setAttribute('aria-label', 'Access granted')
   // Static markup only (nothing from the user), so innerHTML is safe here.
   el.innerHTML = `
-    <div class="access-rays"></div>
-    <div class="access-scan"></div>
-    <div class="access-core">
-      <span class="shock"></span><span class="shock s2"></span><span class="shock s3"></span>
-      <div class="sparks"></div>
-      <svg class="seal" viewBox="0 0 120 120" aria-hidden="true">
-        <circle class="seal-fill" cx="60" cy="60" r="52"/>
-        <circle class="seal-track" cx="60" cy="60" r="52"/>
-        <circle class="seal-ring" cx="60" cy="60" r="52" pathLength="1"/>
-        <path class="seal-check" d="M38 62 L54 78 L84 44" pathLength="1"/>
+    <div class="ax-grid"></div>
+    <div class="ax-beam"></div>
+    <i class="ax-corner tl"></i><i class="ax-corner tr"></i><i class="ax-corner bl"></i><i class="ax-corner br"></i>
+    <div class="ax-tag top"><span>SECURE SIGN-IN</span><span class="ax-id"></span></div>
+    <div class="ax-core">
+      <svg class="ax-svg" viewBox="0 0 200 200" aria-hidden="true">
+        <circle class="r-outer" cx="100" cy="100" r="92"/>
+        <circle class="r-ticks" cx="100" cy="100" r="82"/>
+        <g class="r-arcs"><path d="M100 28 A72 72 0 0 1 172 100"/><path d="M100 172 A72 72 0 0 1 28 100"/><path d="M52 52 A72 72 0 0 1 80 31" /></g>
+        <circle class="r-track" cx="100" cy="100" r="58"/>
+        <circle class="r-draw" cx="100" cy="100" r="58" pathLength="1"/>
+        <circle class="r-glow" cx="100" cy="100" r="44"/>
+        <path class="r-check" d="M76 102 L94 120 L128 80" pathLength="1"/>
       </svg>
+      <span class="ax-pulse"></span><span class="ax-pulse p2"></span>
     </div>
-    <h2 class="access-title" aria-hidden="true"></h2>
-    <p class="access-sub" aria-hidden="true"></p>`
+    <h2 class="ax-title" aria-hidden="true"><span class="ax-word"></span><span class="ax-word"></span></h2>
+    <p class="ax-sub" aria-hidden="true"></p>
+    <ul class="ax-log" aria-hidden="true"><li>Session verified</li><li>Profile loaded</li><li>Link established</li></ul>
+    <div class="ax-bar" aria-hidden="true"><i></i></div>
+    <div class="ax-tag bottom"><span>TAP TO CONTINUE</span><span class="ax-pct">100%</span></div>`
 
-  const title = el.querySelector('.access-title')
-  ;[...'Access granted'].forEach((ch, i) => {
-    const s = document.createElement('span')
-    s.textContent = ch === ' ' ? '\u00a0' : ch
-    s.style.setProperty('--i', i)
-    title.append(s)
+  const words = el.querySelectorAll('.ax-word')
+  ;['ACCESS', 'GRANTED'].forEach((w, k) => {
+    ;[...w].forEach((ch, i) => { const s = document.createElement('span'); s.textContent = ch; s.style.setProperty('--i', i + k * 6); words[k].append(s) })
+    words[k].dataset.t = w
   })
-  el.querySelector('.access-sub').textContent = `Welcome back to ${appName}`
-  const sparks = el.querySelector('.sparks')
-  for (let i = 0; i < 24; i++) {
-    const s = document.createElement('i')
-    s.style.setProperty('--a', `${(360 / 24) * i + (Math.random() * 10 - 5)}deg`)
-    s.style.setProperty('--d', `${90 + Math.random() * 110}px`)
-    s.style.setProperty('--s', `${4 + Math.random() * 6}px`)
-    s.style.setProperty('--c', ['#f5b83d', '#ffe29a', '#a996ff', '#2dd4bf', '#ffffff'][i % 5])
-    sparks.append(s)
-  }
+  el.querySelector('.ax-sub').textContent = `Identity confirmed. Welcome back to ${appName}.`
+  const code = new Uint8Array(3); try { crypto.getRandomValues(code) } catch { /* fine */ }
+  el.querySelector('.ax-id').textContent = 'ID ' + [...code].map((b) => b.toString(16).padStart(2, '0')).join('').toUpperCase()
 
   document.body.append(el)
   let gone = false
@@ -59,5 +57,5 @@ export function playAccessGranted(appName = 'LSDKChat') {
     setTimeout(finish, 1200)                              // safety net
   }
   el.addEventListener('pointerdown', leave)               // tap to skip
-  setTimeout(leave, calm() ? 900 : 2100)
+  setTimeout(leave, motionOn() ? 2900 : 1000)
 }

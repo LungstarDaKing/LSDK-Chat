@@ -13,7 +13,7 @@ export function getA11y() {
   return {
     size: TEXT_SIZES.some(([v]) => v === o.size) ? o.size : d.size,
     contrast: o.contrast === 'high' ? 'high' : 'normal',
-    motion: o.motion === 'reduce' ? 'reduce' : 'system',
+    motion: o.motion === 'reduce' ? 'reduce' : o.motion === 'on' ? 'on' : 'system',
     announce: o.announce !== false,
     lang: DICTATION_LANGS.some(([v]) => v === o.lang) ? o.lang : d.lang,
     commands: o.commands !== false,
@@ -28,7 +28,8 @@ export function apply() {
   const a = getA11y(), root = document.documentElement
   root.style.fontSize = `${a.size}%`
   if (a.contrast === 'high') root.setAttribute('data-contrast', 'high'); else root.removeAttribute('data-contrast')
-  if (a.motion === 'reduce') root.setAttribute('data-motion', 'reduce'); else root.removeAttribute('data-motion')
+  if (a.motion === 'reduce') root.setAttribute('data-motion', 'reduce'); else if (a.motion === 'on') root.setAttribute('data-motion', 'on'); else root.removeAttribute('data-motion')
+  try { window.dispatchEvent(new Event('lsdk-motion')) } catch { /* ignore */ }
   const log = document.querySelector('.messages')
   if (log) log.setAttribute('aria-live', a.announce ? 'polite' : 'off')
 }

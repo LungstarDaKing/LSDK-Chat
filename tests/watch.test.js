@@ -15,7 +15,7 @@ describe('watch links', () => {
   })
   it('refuses everything else and says why', () => {
     expect(parseMediaLink('not a link').error).toMatch(/full link/)
-    expect(parseMediaLink('https://evil.example/watch?v=dQw4w9WgXcQ').error).toMatch(/not supported/)
+    expect(parseMediaLink('https://evil.example/watch?v=dQw4w9WgXcQ').error).toMatch(/not opened/)
     expect(parseMediaLink('https://vm.tiktok.com/ZMabc123/').error).toMatch(/short links/)
     expect(parseMediaLink('javascript:alert(1)').error).toBeTruthy()
     expect(parseMediaLink('https://www.youtube.com/watch?v=short').error).toBeTruthy()
@@ -49,3 +49,24 @@ describe('keeping players in step', () => {
     expect(localChange(row(), 0, { playing: true, pos: 101 }, 0)).toBe(null)
   })
 })
+
+describe('watch together: any link', () => {
+  it('accepts an ordinary page and keeps only its clean address', () => {
+    expect(parseMediaLink('https://vimeo.com/76979871#t=20')).toMatchObject({ provider: 'web', id: 'https://vimeo.com/76979871' })
+    expect(validMedia('web', 'https://vimeo.com/76979871')).toBe(true)
+  })
+  it('refuses threats before they reach the other person', () => {
+    for (const u of ['https://bit.ly/abc123', 'http://vimeo.com/1', 'https://203.0.113.9/video', 'https://paypal-login.example.net/x', 'https://cdn.example.net/a.exe', 'https://user@evil-site.net/x'])
+      expect(parseMediaLink(u).error, u).toMatch(/not opened/)
+  })
+  it('never builds a frame address for a blocked or malformed id', () => {
+    expect(embedUrl('web', 'https://bit.ly/abc123')).toBeNull()
+    expect(embedUrl('web', 'javascript:alert(1)')).toBeNull()
+    expect(embedUrl('web', 'https://vimeo.com/76979871')).toBe('https://vimeo.com/76979871')
+  })
+  it('does not turn a YouTube page that is not a video into a web frame', () => {
+    expect(parseMediaLink('https://www.youtube.com/channel/UCabc').error).toMatch(/one video or song/)
+    expect(parseMediaLink('https://youtube.com.evil-site.net/watch?v=dQw4w9WgXcQ').error).toMatch(/not opened/)
+  })
+})
+

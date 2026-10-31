@@ -1,12 +1,16 @@
-import { h, clear, toast, dialog, friendlyError } from '../lib/dom.js'
+import { h, clear, toast, dialog, confirmDialog, friendlyError } from '../lib/dom.js'
 import { icon } from './icons.js'
-import { PROVIDERS, parseMediaLink, embedUrl, watchApi, YouTubeBridge, expectedPos, matchAction, localChange } from '../lib/watch.js'
+import { PROVIDERS, parseMediaLink, embedUrl, watchApi, YouTubeBridge, expectedPos, matchAction, localChange, deepCheck } from '../lib/watch.js'
+import { scanLink, summarize } from '../lib/linkscan.js'
 
 const SANDBOX = 'allow-scripts allow-same-origin allow-presentation allow-popups allow-popups-to-escape-sandbox allow-forms'
+// pages from "any link" get far less: no pop-ups, no downloads, no top-level navigation, no camera / microphone / location
+const WEB_SANDBOX = 'allow-scripts allow-same-origin allow-presentation allow-forms'
 const frameClass = (provider, id) => ({
   youtube: 'yt', tiktok: 'tt',
   spotify: id.startsWith('track/') || id.startsWith('episode/') ? 'sp' : 'sp big',
   apple: id.includes('?i=') ? 'am' : 'am big',
+  web: 'web',
 }[provider])
 
 /* ---------------- the floating player ---------------- */
@@ -64,6 +68,7 @@ export class WatchPanel {
   mountPlayer() {
     const { provider, media_id: id } = this.row
     this.provider = provider
+    if (provider === 'web') { this.mountWeb(id); return }
     const src = embedUrl(provider, id, { origin: location.origin })
     if (!src) { this.frameBox.textContent = 'This item cannot be shown.'; return }
     const url = provider === 'youtube' && this.embedBase ? src.replace(PROVIDERS.youtube.embed, this.embedBase) : src
@@ -75,6 +80,34 @@ export class WatchPanel {
     if (provider === 'youtube') {
       this.bridge = new YouTubeBridge(f, { origin: this.embedBase || PROVIDERS.youtube.embed, onReport: (r) => this.onReport(r) })
     }
+  }
+
+  // "any link": inspected on THIS device before it is opened, even though the other person already checked it
+  async mountWeb(id) {
+    const token = (this.webToken = (this.webToken || 0) + 1)
+    this.frameBox.className = 'wp-frame web'
+    clear(this.frameBox).append(h('p', { class: 'wp-webmsg' }, icon('shield', 18), ' Checking this link before opening it…'))
+    const scan = scanLink(id)
+    const stop = (title, text) => clear(this.frameBox).append(h('div', { class: 'wp-webmsg danger', role: 'alert' }, h('strong', {}, title), h('span', {}, text), h('span', { class: 'small' }, 'Nothing was opened. Use "Stop for both" or "Watch something else".')))
+    if (scan.verdict === 'blocked') return stop('Link blocked', summarize(scan))
+    const deep = await deepCheck(scan.url)
+    if (this.dead || token !== this.webToken) return
+    if (deep.threat) return stop('Link blocked', `Google Safe Browsing lists this page as dangerous (${deep.threat.toLowerCase().replace(/_/g, ' ')}).`)
+    const open = () => {
+      const f = document.createElement('iframe')
+      f.setAttribute('src', scan.url); f.setAttribute('title', 'Shared web page'); f.setAttribute('allow', 'autoplay; picture-in-picture; fullscreen')
+      f.setAttribute('allowfullscreen', ''); f.setAttribute('referrerpolicy', 'no-referrer'); f.setAttribute('sandbox', WEB_SANDBOX); f.setAttribute('loading', 'eager')
+      const note = h('p', { class: 'small wp-webnote' }, deep.checked ? 'Checked: no known threat found.' : 'Basic checks passed. The extra safety lookup is not set up, so this is not a guarantee.',
+        ' If the page stays empty, that website does not allow being shown here. ',
+        h('a', { href: scan.url, target: '_blank', rel: 'noopener noreferrer nofollow' }, 'Open it in a new tab'), ' (both of you).')
+      clear(this.frameBox).append(f, note); this.frame = f
+    }
+    if (scan.verdict === 'warn') {
+      clear(this.frameBox).append(h('div', { class: 'wp-webmsg warn', role: 'alert' }, h('strong', {}, 'This link looks a little unusual'), h('span', {}, summarize(scan)),
+        h('button', { class: 'btn small', type: 'button', onclick: open }, 'Open it anyway')))
+      return
+    }
+    open()
   }
 
   /* ----- what the other person did ----- */
@@ -135,7 +168,8 @@ export class WatchPanel {
     this.status.textContent = this.isController
       ? (this.isHost ? 'You are in control.' : `You can control it. ${this.nameOfController()} started it.`) + (p.synced ? ' Play, pause and jumping are shared.' : '')
       : `${this.ctx.nameOf(r.controllers[0] || r.host)} is in control.${r.requests.includes(this.me) ? ' You asked to control it.' : ''}`
-    if (!p.synced) this.status.textContent += ` ${p.name} cannot be remote controlled by a website: use the countdown and both press play together. Full songs need you to be signed in to ${p.name} in this browser; otherwise you hear a short preview.`
+    if (r.provider === 'web') this.status.textContent += ' A web page cannot be remote controlled: both of you press play yourselves (use the 3-2-1 countdown to start together).'
+    else if (!p.synced) this.status.textContent += ` ${p.name} cannot be remote controlled by a website: use the countdown and both press play together. Full songs need you to be signed in to ${p.name} in this browser; otherwise you hear a short preview.`
     clear(this.requests)
     if (this.isHost) for (const u of r.requests) this.requests.append(h('div', { class: 'wp-request' }, h('span', {}, `${this.ctx.nameOf(u)} wants to control it`),
       h('button', { class: 'btn primary small', type: 'button', onclick: () => this.act(() => watchApi.grant(this.room, u, true)) }, 'Allow'),
@@ -199,15 +233,24 @@ export class WatchController {
   }
   panelClosed(p, ended) { if (this.panel === p) this.panel = null; this.refresh(); if (ended) this.ctx.releaseIfDone?.() ; else setTimeout(() => this.ctx.releaseIfDone?.(), 0) }
   startDialog(roomId) {
-    const input = h('input', { type: 'url', placeholder: 'Paste a YouTube, Spotify, Apple Music or TikTok link', autocomplete: 'off', 'aria-label': 'Link' })
+    const input = h('input', { type: 'url', placeholder: 'Paste a link (YouTube, Spotify, Apple Music, TikTok or any web page)', autocomplete: 'off', 'aria-label': 'Link' })
     const body = h('div', {}, h('p', {}, 'Paste a link. Both of you will see it in a player over the chat.'),
       input, h('ul', { class: 'small wp-help' },
         h('li', {}, 'YouTube: play, pause and jumping stay in step for both of you.'),
         h('li', {}, 'Spotify, Apple Music, TikTok: both see the same item and press play together after a 3-2-1 countdown.'),
+        h('li', {}, 'Any other website: the link is inspected first. Dangerous links are refused and never opened. Short links (bit.ly and similar) are refused because they hide where they go.'),
         h('li', {}, 'Use headphones in a call, or the other person will hear the sound through your microphone.')))
+    const problem = h('div', { class: 'msg error', role: 'alert', hidden: true })
+    body.append(problem)
     dialog({ title: 'Watch together', body, actions: [{ label: 'Cancel' }, { label: 'Start', kind: 'primary', onClick: async () => {
       const r = parseMediaLink(input.value)
-      if (r.error) { toast(r.error, 'error'); return 'keep-open' }
+      problem.hidden = true
+      if (r.error) { problem.textContent = r.error; problem.hidden = false; return 'keep-open' }
+      if (r.provider === 'web') {
+        const deep = await deepCheck(r.id)
+        if (deep.threat) { problem.textContent = `This link was not opened. Google Safe Browsing lists it as dangerous (${deep.threat.toLowerCase().replace(/_/g, ' ')}).`; problem.hidden = false; return 'keep-open' }
+        if (r.scan.verdict === 'warn' && !(await confirmDialog('This link looks unusual', summarize(r.scan) + ' Share it anyway?', 'Share anyway', true))) return 'keep-open'
+      }
       try { await watchApi.start(roomId, r.provider, r.id) } catch (e) { toast(friendlyError(e), 'error'); return 'keep-open' }
       try { const row = await watchApi.get(roomId); if (row) this.openPanel(row) } catch (e) { toast(friendlyError(e), 'error'); this.refresh() }   // started fine: never start twice
     } }] })

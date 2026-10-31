@@ -20,6 +20,11 @@ import { renderConsent } from './pages/consent.js'
 import { startHeartbeat, stopHeartbeat } from './lib/status.js'
 import { stopNicknames } from './lib/nicknames.js'
 import './lib/theme.js'
+import { consumeAccess, playAccessGranted } from './lib/access.js'
+import './motion.css'
+import { applyMotion } from './lib/motion.js'
+
+applyMotion(); window.addEventListener('lsdk-motion', applyMotion)
 
 // Clickjacking protection (GitHub Pages cannot send X-Frame-Options / frame-ancestors).
 if (window.top !== window.self) {
@@ -32,6 +37,7 @@ const root = document.getElementById('app')
 // NOTE: never await Supabase calls inside this callback (deadlocks supabase-js); defer instead.
 supabase.auth.onAuthStateChange((event, s) => {
   state.session = s
+  if (event === 'SIGNED_IN' && consumeAccess()) playAccessGranted(CONFIG.appName)   // "Access granted" animation
   if (event === 'PASSWORD_RECOVERY') state.recovering = true
   if (event === 'SIGNED_OUT') { state.profile = null; state.recovering = false; teardownChat(true); stopHeartbeat(); stopReminderWatcher(); stopNicknames(); watching = false }
   if (['SIGNED_IN', 'SIGNED_OUT', 'PASSWORD_RECOVERY'].includes(event)) setTimeout(route, 0)

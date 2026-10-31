@@ -69,7 +69,14 @@ export async function renderSettings(root) {
   const drawSize = () => { const cur = getA11y().size; clear(sizeRow); for (const [v, name] of TEXT_SIZES) sizeRow.append(h('button', { type: 'button', role: 'radio', 'aria-checked': String(cur === v), class: cur === v ? 'on' : '', onclick: () => { setA11y('size', v); drawSize() } }, name)) }
   drawSize()
   const contrast = toggle('s-contrast', 'High contrast', 'Stronger text colours and thicker outlines. Saved on this device only.', A.contrast === 'high', (cb) => { setA11y('contrast', cb.checked ? 'high' : 'normal'); flash('Saved') })
-  const motion = toggle('s-motion', 'Reduce motion', 'Turns off animations such as typing bubbles and pop-ins. (Your device setting is also respected.)', A.motion === 'reduce', (cb) => { setA11y('motion', cb.checked ? 'reduce' : 'system'); flash('Saved') })
+  const motionRow = h('div', { class: 'seg', role: 'radiogroup', 'aria-label': 'Animation' })
+  const drawMotion = () => {
+    const cur = getA11y().motion; clear(motionRow)
+    for (const [v, name] of [['system', 'Auto'], ['on', 'On'], ['reduce', 'Still']]) motionRow.append(h('button', { type: 'button', role: 'radio', 'aria-checked': String(cur === v), class: cur === v ? 'on' : '', onclick: () => { setA11y('motion', v); drawMotion(); flash('Saved') } }, name))
+  }
+  drawMotion()
+  const motion = { el: h('div', { class: 'field' }, h('label', {}, 'Animation'), motionRow,
+    h('p', { class: 'small' }, 'Auto follows your device\'s "reduce motion" setting. On always plays the moving sign-in background and the Access granted screen, even if your device says to reduce motion. Still turns movement off everywhere. Saved on this device only.')) }
   const announce = toggle('s-announce', 'Screen reader: read out new messages', 'New messages in the open chat are announced automatically. Turn off if it is too chatty.', A.announce, (cb) => { setA11y('announce', cb.checked); flash('Saved') })
   const cmds = toggle('s-cmds', 'Voice commands while dictating', 'Say "send", "clear" or "stop" (English) while dictating to control the message box.', A.commands, (cb) => { setA11y('commands', cb.checked); flash('Saved') })
   const langSel = h('select', { id: 's-dictlang', 'aria-label': 'Dictation language' }, DICTATION_LANGS.map(([v, n]) => h('option', { value: v, selected: v === A.lang }, n)))

@@ -1,13 +1,15 @@
 // "Konnected" background for the sign-in hero: little glowing people-dots drift around, link up when they
 // get close, and send message pulses along the links. Move the mouse/finger over the hero to join the network.
 // Canvas only (no inline styles), so it is allowed by the app's Content-Security-Policy.
+// When animation is Still (Settings, or the button on the sign-in page) it draws one calm frame and stops.
+import { motionOn, onMotion } from './motion.js'
 const COLORS = ['#f5b83d', '#a996ff', '#2dd4bf', '#ff7a8c', '#6fa0ff']
 
 export function startKonnect(canvas) {
   const ctx = canvas.getContext('2d')
   if (!ctx) return
   const host = canvas.parentElement?.parentElement || canvas.parentElement   // the hero
-  const calm = matchMedia('(prefers-reduced-motion: reduce)').matches
+  let running = false, unsub = null
   let w = 0, h = 0, link = 120, nodes = [], pulses = [], ripples = [], raf = 0, last = 0, nextPulse = 0
   const me = { x: 0, y: 0, on: false }
 
@@ -22,7 +24,7 @@ export function startKonnect(canvas) {
     const want = Math.round(Math.min(48, Math.max(14, (w * h) / 16000)))
     while (nodes.length < want) nodes.push(spawn())
     nodes.length = want
-    if (calm) draw()
+    if (!running) draw(1000)
   }
   const spawn = () => {
     const a = Math.random() * Math.PI * 2, s = 8 + Math.random() * 16           // pixels per second
@@ -88,24 +90,34 @@ export function startKonnect(canvas) {
     if (!canvas.isConnected) return stop()                // the page was replaced: stop quietly
     const dt = Math.min((t - (last || t)) / 1000, 0.05); last = t
     step(dt); draw(t)
-    raf = requestAnimationFrame(frame)
+    if (running) raf = requestAnimationFrame(frame)
   }
   function move(e) {
     const r = canvas.getBoundingClientRect()
     me.x = e.clientX - r.left; me.y = e.clientY - r.top; me.on = true
   }
   const leave = () => { me.on = false }
+  function start() {
+    if (running) return
+    running = true; last = 0
+    host?.addEventListener('pointermove', move, { passive: true })
+    host?.addEventListener('pointerleave', leave)
+    raf = requestAnimationFrame(frame)
+  }
+  function pause() {
+    running = false; cancelAnimationFrame(raf); me.on = false
+    host?.removeEventListener('pointermove', move); host?.removeEventListener('pointerleave', leave)
+    draw(1000)                                            // one calm, still frame
+  }
   function stop() {
-    cancelAnimationFrame(raf); ro.disconnect()
+    running = false; cancelAnimationFrame(raf); ro.disconnect(); unsub?.()
     host?.removeEventListener('pointermove', move); host?.removeEventListener('pointerleave', leave)
   }
 
   const ro = new ResizeObserver(resize)
   ro.observe(canvas)
   resize()
-  if (!calm) {
-    host?.addEventListener('pointermove', move, { passive: true })
-    host?.addEventListener('pointerleave', leave)
-    raf = requestAnimationFrame(frame)
-  }
+  unsub = onMotion((on) => (on ? start() : pause()))
+  if (motionOn()) start(); else draw(1000)
+  return stop
 }
